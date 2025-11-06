@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import time
 import os
 
@@ -137,20 +138,21 @@ df['drawdown_btc'] = (df['btc_hold'] - df['cumulative_max_btc']) / df['cumulativ
 # 시각화
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9,7), sharex=True, dpi = 150)
 
-# 누적 수익률
-ax1.plot(df.index, df['btc_hold'], label='BTC Hold')
-ax1.plot(df_mrvb.index, df_mrvb['cumulative_return'], label='Moving Average Breakout Strategy')
-ax1.set_ylabel('Cumulative Return')
+# 누적 수익률 (1에서 시작, LOG Y축)
+ax1.plot(df.index, df['btc_hold'], label='BTC Hold', linewidth=2)
+ax1.plot(df_mrvb.index, df_mrvb['cumulative_return'], label='Moving Average Breakout Strategy', linewidth=2)
+ax1.set_ylabel('Cumulative Return (Starting from 1)')
 ax1.set_title('Moving Average Breakout Strategy vs. BTC Hold')
 ax1.legend()
 ax1.set_yscale('log')
 
-# 드로우다운
-ax2.plot(df.index, df['drawdown_btc'], label='BTC Hold Drawdown')
-ax2.plot(df_mrvb.index, df_mrvb['drawdown_strategy'], label='Strategy Drawdown') #매수/매도 시점의 Drawdown이라서 실제 고점대비 drawdown대비 과소평가될수있음
-ax2.set_ylabel('Drawdown')
+# 드로우다운 (% 표시)
+ax2.plot(df.index, df['drawdown_btc'] * 100, label='BTC Hold Drawdown', linewidth=2)
+ax2.plot(df_mrvb.index, df_mrvb['drawdown_strategy'] * 100, label='Strategy Drawdown', linewidth=2) #매수/매도 시점의 Drawdown이라서 실제 고점대비 drawdown대비 과소평가될수있음
+ax2.set_ylabel('Drawdown (%)')
 ax2.set_xlabel('Date')
 ax2.legend()
+ax2.yaxis.set_major_formatter(mticker.PercentFormatter())
 
 ax1.grid(True)
 ax2.grid(True)
