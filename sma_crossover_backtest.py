@@ -105,6 +105,7 @@ class SMABacktest:
         Args:
             slippage: 슬리피지 (default: 0.2%)
         """
+        self.slippage = slippage  # 슬리피지를 저장
         df = self.data.copy()
 
         # SMA 계산
@@ -122,18 +123,22 @@ class SMABacktest:
         # 매도 신호: 1에서 0으로 변경 (포지션 청산)
         df['sell_signal'] = df['position_change'] == -1
 
-        # 매수가/매도가 (다음날 시가로 체결)
-        df['buy_price'] = np.where(df['buy_signal'], df['Open'].shift(-1), np.nan)
-        df['sell_price'] = np.where(df['sell_signal'], df['Open'].shift(-1), np.nan)
+        # 매수가/매도가 (종가 기준)
+        df['buy_price'] = np.where(df['buy_signal'], df['Close'], np.nan)
+        df['sell_price'] = np.where(df['sell_signal'], df['Close'], np.nan)
 
         # 일일 수익률 계산
         # 포지션을 보유 중일 때는 가격 변동률, 현금 보유 중일 때는 0
         df['daily_price_return'] = df['Close'].pct_change()
         df['daily_return'] = df['position'].shift(1) * df['daily_price_return']
 
-        # 매수/매도 시 슬리피지 적용
-        df.loc[df['buy_signal'], 'daily_return'] = df.loc[df['buy_signal'], 'daily_return'] - slippage
-        df.loc[df['sell_signal'], 'daily_return'] = df.loc[df['sell_signal'], 'daily_return'] - slippage
+        # 매수/매도 시 슬리피지 적용 (매수 시 -슬리피지, 매도 시 -슬리피지)
+        # 매수 다음날부터 포지션 진입 효과가 반영되므로, 매수 당일에 슬리피지 차감
+        slippage_cost = pd.Series(0.0, index=df.index)
+        slippage_cost[df['buy_signal']] = -slippage
+        slippage_cost[df['sell_signal']] = -slippage
+
+        df['daily_return'] = df['daily_return'] + slippage_cost
 
         # 누적 수익률
         df['cumulative_return'] = (1 + df['daily_return']).cumprod()
@@ -146,7 +151,12 @@ class SMABacktest:
 
     def calculate_performance_metrics(self):
         """성과 지표 계산"""
-        df = self.results.dropna()
+        df = self.results.copy()
+        # NaN 값이 있는 초기 기간 제거 (SMA 계산을 위한 기간)
+        df = df[df['SMA'].notna() & df['cumulative_return'].notna()]
+
+        if len(df) == 0:
+            raise ValueError("No valid data after removing NaN values")
 
         # 거래 통계
         total_buy_trades = df['buy_signal'].sum()
@@ -166,9 +176,11 @@ class SMABacktest:
             buy_dates = df[(df['buy_signal']) & (df.index < idx)].index
             if len(buy_dates) > 0:
                 last_buy_date = buy_dates[-1]
-                buy_price = df.loc[last_buy_date, 'Open']
-                sell_price = df.loc[idx, 'Open']
-                if sell_price > buy_price:
+                buy_price = df.loc[last_buy_date, 'Close']
+                sell_price = df.loc[idx, 'Close']
+                # 슬리피지를 고려한 수익률 계산
+                trade_return = (sell_price / buy_price - 1) - (2 * self.slippage)
+                if trade_return > 0:
                     winning_trades += 1
                 else:
                     losing_trades += 1
@@ -235,7 +247,9 @@ class SMABacktest:
 
     def plot_results(self, save_path='sma_backtest_results.png'):
         """결과 시각화"""
-        df = self.results.dropna()
+        df = self.results.copy()
+        # NaN 값이 있는 초기 기간 제거 (SMA 계산을 위한 기간)
+        df = df[df['SMA'].notna() & df['cumulative_return'].notna()]
 
         fig = plt.figure(figsize=(16, 12))
         gs = fig.add_gridspec(4, 2, hspace=0.3, wspace=0.3)
