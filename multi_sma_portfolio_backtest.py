@@ -62,7 +62,10 @@ class MultiSMAPortfolioBacktest:
             df.columns = [col.capitalize() for col in df.columns]
 
             # 날짜 필터링
-            df = df[(df.index >= self.start_date) & (df.index <= self.end_date)]
+            if self.start_date is not None:
+                df = df[df.index >= self.start_date]
+            if self.end_date is not None:
+                df = df[df.index <= self.end_date]
 
             self.data[symbol] = df
             print(f"  Loaded {len(df)} data points from {df.index[0]} to {df.index[-1]}")
@@ -495,7 +498,16 @@ class MultiSMAPortfolioBacktest:
         print("\n" + "="*150)
         print(f"{'Multi-SMA Portfolio Backtest Results':^150}")
         print("="*150)
-        print(f"\n기간: {self.start_date} ~ {self.end_date}")
+
+        # 실제 데이터 기간 확인
+        if self.rebalanced_portfolio is not None and len(self.rebalanced_portfolio) > 0:
+            actual_start = self.rebalanced_portfolio.index[0].strftime('%Y-%m-%d')
+            actual_end = self.rebalanced_portfolio.index[-1].strftime('%Y-%m-%d')
+            print(f"\n기간: {actual_start} ~ {actual_end} (전체 데이터)")
+        else:
+            start_str = self.start_date if self.start_date else "전체"
+            end_str = self.end_date if self.end_date else "현재"
+            print(f"\n기간: {start_str} ~ {end_str}")
         print(f"종목: {', '.join([s.split('_')[0] for s in self.symbols])}")
         print(f"SMA 윈도우: {', '.join([str(w) for w in self.sma_windows])}")
         print(f"포트폴리오 구성: 5개 SMA 전략에 동일 비중 (각 20%), 매일 리밸런싱")
@@ -569,7 +581,7 @@ def main():
     backtest = MultiSMAPortfolioBacktest(
         symbols=['BTC_KRW', 'ETH_KRW', 'ADA_KRW', 'XRP_KRW'],
         sma_windows=[20, 25, 30, 35, 40],
-        start_date='2018-01-01',
+        start_date=None,  # 전체 데이터 사용
         end_date=None,
         slippage=0.002  # 0.2%
     )
