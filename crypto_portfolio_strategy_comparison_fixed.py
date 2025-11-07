@@ -225,9 +225,9 @@ class CryptoPortfolioComparisonFixed:
 
     # ==================== 포트폴리오 구성 ====================
     def create_portfolios(self):
-        """각 전략별로 동일 비중 포트폴리오 생성"""
+        """각 전략별로 동일 비중 포트폴리오 생성 (매일 리밸런싱)"""
         print("\n" + "="*80)
-        print("Creating equal-weight portfolios...")
+        print("Creating equal-weight portfolios (Daily Rebalancing)...")
         print("="*80 + "\n")
 
         weight = 1.0 / len(self.symbols)  # 동일 비중 (25% each)
@@ -242,7 +242,7 @@ class CryptoPortfolioComparisonFixed:
             for idx in all_indices[1:]:
                 common_index = common_index.intersection(idx)
 
-            # 포트폴리오 수익률 계산
+            # 포트폴리오 수익률 계산 (매일 리밸런싱)
             portfolio_returns = pd.Series(0.0, index=common_index)
 
             for symbol in self.symbols:
@@ -262,6 +262,115 @@ class CryptoPortfolioComparisonFixed:
         print("\n" + "="*80)
         print("Portfolio creation completed!")
         print("="*80 + "\n")
+
+    def create_rebalancing_portfolios(self, rebalance_freq='M', rebalance_cost=0.001):
+        """다양한 리밸런싱 전략으로 포트폴리오 생성
+
+        Args:
+            rebalance_freq: 'M' (월간), 'Q' (분기), 'Y' (연간), 'BH' (Buy & Hold)
+            rebalance_cost: 리밸런싱 비용 (default: 0.1%)
+        """
+        freq_names = {
+            'M': 'Monthly Rebalancing',
+            'Q': 'Quarterly Rebalancing',
+            'Y': 'Yearly Rebalancing',
+            'BH': 'Buy & Hold (No Rebalancing)'
+        }
+
+        print(f"\n>>> Creating portfolios with {freq_names[rebalance_freq]}...")
+
+        results = {}
+        initial_weight = 1.0 / len(self.symbols)
+
+        for strategy_name in self.strategy_results.keys():
+            # 모든 종목의 공통 날짜 인덱스 찾기
+            all_indices = [self.strategy_results[strategy_name][symbol].index
+                          for symbol in self.symbols]
+            common_index = all_indices[0]
+            for idx in all_indices[1:]:
+                common_index = common_index.intersection(idx)
+
+            # 각 종목의 누적 수익률 가져오기
+            cumulative_values = {}
+            for symbol in self.symbols:
+                cum_vals = self.strategy_results[strategy_name][symbol].loc[common_index, 'cumulative'].copy()
+                # NaN 값을 forward fill로 채우고, 남은 NaN은 1.0으로 채움
+                cum_vals = cum_vals.ffill().fillna(1.0)
+                cumulative_values[symbol] = cum_vals
+
+            # 포트폴리오 가치 계산
+            portfolio_value = pd.Series(1.0, index=common_index)
+            weights = {symbol: initial_weight for symbol in self.symbols}
+
+            # 리밸런싱 날짜 결정
+            if rebalance_freq == 'BH':
+                # Buy & Hold: 리밸런싱 없음
+                rebalance_dates = [common_index[0]]
+            else:
+                # 주기적 리밸런싱
+                rebalance_dates = pd.date_range(
+                    start=common_index[0],
+                    end=common_index[-1],
+                    freq=rebalance_freq
+                ).intersection(common_index)
+                if common_index[0] not in rebalance_dates:
+                    rebalance_dates = rebalance_dates.insert(0, common_index[0])
+
+            last_rebalance_values = {symbol: initial_weight for symbol in self.symbols}
+            portfolio_value.iloc[0] = 1.0
+
+            for i, date in enumerate(common_index):
+                if i == 0:
+                    continue
+
+                # 각 자산의 가치 업데이트
+                current_values = {}
+                for symbol in self.symbols:
+                    prev_date = common_index[i-1]
+                    # 전날과 오늘의 누적 수익률 비율로 자산 가치 업데이트
+                    if cumulative_values[symbol].loc[prev_date] != 0:
+                        ratio = cumulative_values[symbol].loc[date] / cumulative_values[symbol].loc[prev_date]
+                    else:
+                        ratio = 1.0
+                    current_values[symbol] = last_rebalance_values[symbol] * ratio
+
+                # 리밸런싱 날짜인지 확인
+                if date in rebalance_dates and date != common_index[0]:
+                    # 현재 총 가치
+                    total_value = sum(current_values.values())
+
+                    # 리밸런싱 비용 차감
+                    # 각 자산의 목표 비중과 현재 비중의 차이만큼 거래
+                    trading_volume = 0
+                    for symbol in self.symbols:
+                        current_weight = current_values[symbol] / total_value
+                        target_weight = initial_weight
+                        trading_volume += abs(current_weight - target_weight)
+
+                    # 거래 비용 차감 (편도 거래량에 비용 적용)
+                    total_value *= (1 - trading_volume * rebalance_cost)
+
+                    # 동일 비중으로 재조정
+                    for symbol in self.symbols:
+                        last_rebalance_values[symbol] = total_value * initial_weight
+                else:
+                    # 리밸런싱 없음: 현재 가치 유지
+                    last_rebalance_values = current_values.copy()
+
+                # 포트폴리오 총 가치 기록
+                portfolio_value.loc[date] = sum(last_rebalance_values.values())
+
+            # 수익률 계산
+            portfolio_returns = portfolio_value.pct_change().fillna(0)
+
+            # 결과 저장
+            results[strategy_name] = pd.DataFrame({
+                'returns': portfolio_returns,
+                'cumulative': portfolio_value,
+                'rebalance_freq': freq_names[rebalance_freq]
+            }, index=common_index)
+
+        return results
 
     # ==================== 성과 지표 계산 ====================
     def calculate_metrics(self, returns_series, name):
@@ -694,6 +803,169 @@ class CryptoPortfolioComparisonFixed:
 
         return saved_files
 
+    def compare_rebalancing_strategies(self):
+        """다양한 리밸런싱 전략 비교 분석"""
+        print("\n" + "="*80)
+        print("Comparing Rebalancing Strategies...")
+        print("="*80 + "\n")
+
+        # 다양한 리밸런싱 전략으로 포트폴리오 생성
+        rebalancing_results = {}
+        rebalancing_results['Daily'] = self.portfolio_results  # 기존 매일 리밸런싱 결과
+
+        for freq in ['BH', 'Y', 'Q', 'M']:
+            results = self.create_rebalancing_portfolios(rebalance_freq=freq, rebalance_cost=0.001)
+            freq_names = {
+                'BH': 'Buy & Hold',
+                'Y': 'Yearly',
+                'Q': 'Quarterly',
+                'M': 'Monthly'
+            }
+            rebalancing_results[freq_names[freq]] = results
+
+        # 각 전략별 리밸런싱 비교 메트릭 계산
+        comparison_data = []
+
+        for strategy_name in self.strategy_results.keys():
+            for rebal_name, rebal_results in rebalancing_results.items():
+                if strategy_name in rebal_results:
+                    returns = rebal_results[strategy_name]['returns']
+                    metrics = self.calculate_metrics(returns, f"{strategy_name} - {rebal_name}")
+                    metrics['Rebalancing'] = rebal_name
+                    metrics['Strategy'] = strategy_name
+                    comparison_data.append(metrics)
+
+        comparison_df = pd.DataFrame(comparison_data)
+
+        # 저장
+        self.rebalancing_results = rebalancing_results
+        self.rebalancing_comparison_df = comparison_df
+
+        print("\n" + "="*80)
+        print("Rebalancing comparison completed!")
+        print("="*80 + "\n")
+
+        return comparison_df
+
+    def plot_rebalancing_comparison(self, save_path='rebalancing_comparison.png'):
+        """리밸런싱 전략 비교 시각화"""
+        if not hasattr(self, 'rebalancing_results'):
+            print("Error: Run compare_rebalancing_strategies() first!")
+            return
+
+        fig = plt.figure(figsize=(20, 14))
+        gs = fig.add_gridspec(4, 3, hspace=0.35, wspace=0.3)
+
+        strategies = list(self.strategy_results.keys())
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+        rebal_methods = list(self.rebalancing_results.keys())
+
+        # 1-3. 각 전략별 리밸런싱 효과 비교
+        for idx, strategy_name in enumerate(strategies):
+            ax = fig.add_subplot(gs[0, idx])
+
+            for i, rebal_name in enumerate(rebal_methods):
+                if strategy_name in self.rebalancing_results[rebal_name]:
+                    cumulative = self.rebalancing_results[rebal_name][strategy_name]['cumulative']
+                    ax.plot(cumulative.index, cumulative, label=rebal_name,
+                           linewidth=2, alpha=0.8, color=colors[i])
+
+            ax.set_title(f'{strategy_name}', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Cumulative Return', fontsize=10)
+            ax.legend(fontsize=8, loc='upper left')
+            ax.grid(True, alpha=0.3)
+            ax.set_yscale('log')
+
+        # 4. 총 수익률 비교 (전략별)
+        ax4 = fig.add_subplot(gs[1, :])
+        comparison_pivot = self.rebalancing_comparison_df.pivot(
+            index='Strategy', columns='Rebalancing', values='Total Return (%)'
+        )
+        comparison_pivot = comparison_pivot[rebal_methods]  # 순서 맞추기
+        comparison_pivot.plot(kind='bar', ax=ax4, width=0.8, color=colors[:len(rebal_methods)])
+        ax4.set_title('Total Return by Rebalancing Method', fontsize=14, fontweight='bold')
+        ax4.set_ylabel('Total Return (%)', fontsize=11)
+        ax4.set_xlabel('Strategy', fontsize=11)
+        ax4.legend(title='Rebalancing', fontsize=10)
+        ax4.grid(True, alpha=0.3, axis='y')
+        plt.setp(ax4.xaxis.get_majorticklabels(), rotation=0)
+
+        # 5. CAGR 비교
+        ax5 = fig.add_subplot(gs[2, 0])
+        cagr_pivot = self.rebalancing_comparison_df.pivot(
+            index='Strategy', columns='Rebalancing', values='CAGR (%)'
+        )
+        cagr_pivot = cagr_pivot[rebal_methods]
+        cagr_pivot.plot(kind='bar', ax=ax5, width=0.8, color=colors[:len(rebal_methods)])
+        ax5.set_title('CAGR by Rebalancing Method', fontsize=12, fontweight='bold')
+        ax5.set_ylabel('CAGR (%)', fontsize=10)
+        ax5.set_xlabel('Strategy', fontsize=10)
+        ax5.legend(title='Rebalancing', fontsize=8)
+        ax5.grid(True, alpha=0.3, axis='y')
+        plt.setp(ax5.xaxis.get_majorticklabels(), rotation=0)
+
+        # 6. MDD 비교
+        ax6 = fig.add_subplot(gs[2, 1])
+        mdd_pivot = self.rebalancing_comparison_df.pivot(
+            index='Strategy', columns='Rebalancing', values='MDD (%)'
+        )
+        mdd_pivot = mdd_pivot[rebal_methods]
+        mdd_pivot.plot(kind='bar', ax=ax6, width=0.8, color=colors[:len(rebal_methods)])
+        ax6.set_title('MDD by Rebalancing Method', fontsize=12, fontweight='bold')
+        ax6.set_ylabel('MDD (%)', fontsize=10)
+        ax6.set_xlabel('Strategy', fontsize=10)
+        ax6.legend(title='Rebalancing', fontsize=8)
+        ax6.grid(True, alpha=0.3, axis='y')
+        plt.setp(ax6.xaxis.get_majorticklabels(), rotation=0)
+
+        # 7. Sharpe Ratio 비교
+        ax7 = fig.add_subplot(gs[2, 2])
+        sharpe_pivot = self.rebalancing_comparison_df.pivot(
+            index='Strategy', columns='Rebalancing', values='Sharpe Ratio'
+        )
+        sharpe_pivot = sharpe_pivot[rebal_methods]
+        sharpe_pivot.plot(kind='bar', ax=ax7, width=0.8, color=colors[:len(rebal_methods)])
+        ax7.set_title('Sharpe Ratio by Rebalancing Method', fontsize=12, fontweight='bold')
+        ax7.set_ylabel('Sharpe Ratio', fontsize=10)
+        ax7.set_xlabel('Strategy', fontsize=10)
+        ax7.legend(title='Rebalancing', fontsize=8)
+        ax7.grid(True, alpha=0.3, axis='y')
+        plt.setp(ax7.xaxis.get_majorticklabels(), rotation=0)
+
+        # 8. 리밸런싱 효과 요약 테이블
+        ax8 = fig.add_subplot(gs[3, :])
+        ax8.axis('off')
+
+        # 각 전략별로 최고 성과 리밸런싱 방법 찾기
+        summary_text = "Rebalancing Performance Summary\n" + "="*80 + "\n\n"
+
+        for strategy_name in strategies:
+            strategy_data = self.rebalancing_comparison_df[
+                self.rebalancing_comparison_df['Strategy'] == strategy_name
+            ].sort_values('Total Return (%)', ascending=False)
+
+            best_rebal = strategy_data.iloc[0]
+            worst_rebal = strategy_data.iloc[-1]
+
+            summary_text += f"{strategy_name}:\n"
+            summary_text += f"  Best:  {best_rebal['Rebalancing']:12s} - Return: {best_rebal['Total Return (%)']:>8.2f}% | "
+            summary_text += f"CAGR: {best_rebal['CAGR (%)']:>6.2f}% | Sharpe: {best_rebal['Sharpe Ratio']:>5.2f}\n"
+            summary_text += f"  Worst: {worst_rebal['Rebalancing']:12s} - Return: {worst_rebal['Total Return (%)']:>8.2f}% | "
+            summary_text += f"CAGR: {worst_rebal['CAGR (%)']:>6.2f}% | Sharpe: {worst_rebal['Sharpe Ratio']:>5.2f}\n"
+            summary_text += f"  Difference: {best_rebal['Total Return (%)'] - worst_rebal['Total Return (%)']:>6.2f}%\n\n"
+
+        ax8.text(0.05, 0.95, summary_text, transform=ax8.transAxes,
+                fontsize=10, verticalalignment='top', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.2))
+
+        fig.suptitle('Portfolio Rebalancing Strategy Comparison\n'
+                    f'Period: {self.start_date} to {self.end_date} | Rebalancing Cost: 0.1%',
+                    fontsize=16, fontweight='bold', y=0.995)
+
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"\nRebalancing comparison chart saved to {save_path}")
+        plt.close()
+
     def print_metrics_table(self, metrics_df):
         """성과 지표 테이블 출력"""
         print("\n" + "="*150)
@@ -726,11 +998,12 @@ class CryptoPortfolioComparisonFixed:
 
         print("\n" + "="*150 + "\n")
 
-    def run_analysis(self, create_individual_charts=True):
+    def run_analysis(self, create_individual_charts=True, compare_rebalancing=True):
         """전체 분석 실행
 
         Args:
             create_individual_charts: 개별 종목 차트 생성 여부 (default: True)
+            compare_rebalancing: 리밸런싱 전략 비교 여부 (default: True)
         """
         # 1. 데이터 로드
         self.load_data()
@@ -750,7 +1023,23 @@ class CryptoPortfolioComparisonFixed:
         # 6. 포트폴리오 비교 시각화
         self.plot_comparison(metrics_df)
 
-        # 7. 개별 종목 시각화 (옵션)
+        # 7. 리밸런싱 전략 비교 (옵션)
+        if compare_rebalancing:
+            rebalancing_df = self.compare_rebalancing_strategies()
+            self.plot_rebalancing_comparison()
+
+            # 리밸런싱 비교 결과 출력
+            print("\n" + "="*150)
+            print(f"{'리밸런싱 전략 비교 결과':^150}")
+            print("="*150)
+            print("\n리밸런싱 방법별 성과:")
+            pd.set_option('display.max_columns', None)
+            pd.set_option('display.width', 150)
+            print(rebalancing_df[['Strategy', 'Rebalancing', 'Total Return (%)', 'CAGR (%)',
+                                  'MDD (%)', 'Sharpe Ratio']].to_string(index=False))
+            print("\n" + "="*150 + "\n")
+
+        # 8. 개별 종목 시각화 (옵션)
         if create_individual_charts:
             self.plot_all_individual_analyses()
 
@@ -772,12 +1061,17 @@ def main():
     )
 
     # 분석 실행
-    metrics_df = comparison.run_analysis()
+    metrics_df = comparison.run_analysis(create_individual_charts=True, compare_rebalancing=True)
 
     # 결과 저장
     print("\nSaving results to CSV...")
     metrics_df.to_csv('crypto_portfolio_metrics_fixed.csv', index=False)
     print("Metrics saved to crypto_portfolio_metrics_fixed.csv")
+
+    # 리밸런싱 비교 결과 저장
+    if hasattr(comparison, 'rebalancing_comparison_df'):
+        comparison.rebalancing_comparison_df.to_csv('rebalancing_comparison.csv', index=False)
+        print("Rebalancing comparison saved to rebalancing_comparison.csv")
 
     # 각 포트폴리오 상세 결과 저장
     for strategy_name in comparison.portfolio_results.keys():
