@@ -579,7 +579,7 @@ def main():
 
     # 백테스트 실행
     backtest = MultiSMAPortfolioBacktest(
-        symbols=['BTC_KRW', 'ETH_KRW', 'ADA_KRW', 'XRP_KRW'],
+        symbols=['BTC_KRW', 'ETH_KRW'],
         sma_windows=[20, 25, 30, 35, 40],
         start_date=None,  # 전체 데이터 사용
         end_date=None,
