@@ -2,11 +2,16 @@
 암호화폐 포트폴리오 전략 비교 분석 (수정 버전)
 
 세 가지 전략을 BTC, ETH, ADA, XRP에 적용하여 동일 비중 포트폴리오 성과 비교:
-1. Turtle Trading (터틀트레이딩) - ✅ 현실적인 체결 가격으로 수정
+1. Turtle Trading (터틀트레이딩) - ✅ 현실적인 체결 가격 및 일일 평가 방식으로 수정
 2. RSI 55 전략
 3. SMA 30 전략
 
 각 전략은 4개 종목에 25%씩 동일 비중 투자
+
+터틀 트레이딩 수정 사항:
+- 체결 가격: entry_high/exit_low → 당일 종가 + 슬리피지
+- 수익률 계산: 매수/매도 시점에서만 계산 → 포지션 보유 중 매일 미실현 손익 반영
+  (RSI/SMA 전략과 동일한 방식으로 공정한 비교 가능)
 """
 
 import pandas as pd
@@ -75,8 +80,10 @@ class CryptoPortfolioComparisonFixed:
         - M일 최저가 하향 돌파 시 매도 → 당일 종가에 체결 (현실적)
 
         수정 사항:
-        - 기존: entry_high/exit_low 가격에 체결 (불가능)
-        - 수정: 돌파 시그널 발생 시 당일 종가에 체결 + 슬리피지
+        1. 체결 가격 수정: entry_high/exit_low 가격 → 당일 종가 + 슬리피지
+        2. 수익률 계산 수정: 포지션 보유 중에도 일일 가격 변동 반영 (RSI/SMA와 동일한 방식)
+           - 기존: 매수/매도 시점에서만 수익률 계산
+           - 수정: 포지션 보유 중 매일 미실현 손익 반영
         """
         df = df.copy()
 
@@ -97,24 +104,25 @@ class CryptoPortfolioComparisonFixed:
             elif df.iloc[i]['Low'] < df.iloc[i]['exit_low'] and df.iloc[i-1]['position'] == 1:
                 df.iloc[i, df.columns.get_loc('position')] = 0
 
-        # 수익률 계산 (수정 버전)
-        df['returns'] = 0.0
-        df['buy_price'] = np.nan
+        # ✅ 수정: 포지션 보유 중에도 일일 수익률 반영 (RSI/SMA와 동일한 방식)
+        # 포지션 변화 감지
+        df['position_change'] = df['position'].diff()
 
-        for i in range(1, len(df)):
-            if df.iloc[i]['position'] == 1 and df.iloc[i-1]['position'] == 0:
-                # ✅ 수정: 당일 종가에 매수 (슬리피지 포함)
-                df.iloc[i, df.columns.get_loc('buy_price')] = df.iloc[i]['Close'] * (1 + self.slippage)
-            elif df.iloc[i]['position'] == 0 and df.iloc[i-1]['position'] == 1:
-                # ✅ 수정: 당일 종가에 매도 (슬리피지 포함)
-                buy_price = df.iloc[i-1]['buy_price'] if pd.notna(df.iloc[i-1]['buy_price']) else df.iloc[i-1]['Close']
-                sell_price = df.iloc[i]['Close'] * (1 - self.slippage)
-                df.iloc[i, df.columns.get_loc('returns')] = (sell_price / buy_price - 1)
-            elif df.iloc[i]['position'] == 1:
-                # 포지션 유지
-                if pd.notna(df.iloc[i-1]['buy_price']):
-                    df.iloc[i, df.columns.get_loc('buy_price')] = df.iloc[i-1]['buy_price']
+        # 일일 수익률 계산
+        df['daily_price_return'] = df['Close'].pct_change()
+        df['returns'] = df['position'].shift(1) * df['daily_price_return']
 
+        # 매수/매도 시 슬리피지 적용
+        slippage_cost = pd.Series(0.0, index=df.index)
+        slippage_cost[df['position_change'] == 1] = -self.slippage  # 매수
+        slippage_cost[df['position_change'] == -1] = -self.slippage  # 매도
+
+        df['returns'] = df['returns'] + slippage_cost
+
+        # NaN 값 처리
+        df['returns'] = df['returns'].fillna(0)
+
+        # 누적 수익률
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
@@ -704,8 +712,9 @@ class CryptoPortfolioComparisonFixed:
         print(f"포트폴리오 구성: 각 종목 동일 비중 (25%)")
         print(f"슬리피지: {self.slippage*100}%")
         print(f"\n✅ 터틀트레이딩 수정 사항:")
-        print(f"  - 기존: entry_high/exit_low 가격에 체결 (비현실적)")
-        print(f"  - 수정: 돌파 신호 발생 시 당일 종가에 체결 + 슬리피지 (현실적)")
+        print(f"  1. 체결 가격: entry_high/exit_low 가격 → 당일 종가 + 슬리피지")
+        print(f"  2. 수익률 계산: 매수/매도 시점에서만 계산 → 포지션 보유 중 매일 미실현 손익 반영")
+        print(f"     (RSI/SMA와 동일한 방식으로 공정한 비교 가능)")
 
         # 포트폴리오 성과
         print("\n" + "-"*150)
