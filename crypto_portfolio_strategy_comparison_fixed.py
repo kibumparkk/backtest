@@ -463,6 +463,237 @@ class CryptoPortfolioComparisonFixed:
         print(f"\nChart saved to {save_path}")
         plt.close()
 
+    def plot_individual_ticker_analysis(self, strategy_name, symbol, save_dir='individual_results'):
+        """개별 종목별 전략 상세 분석 시각화
+
+        Args:
+            strategy_name: 전략 이름
+            symbol: 종목 심볼
+            save_dir: 저장 디렉토리
+        """
+        import os
+        os.makedirs(save_dir, exist_ok=True)
+
+        # 데이터 가져오기
+        result_df = self.strategy_results[strategy_name][symbol].copy()
+        original_data = self.data[symbol].copy()
+
+        # 파일명 생성
+        strategy_clean = strategy_name.replace(' ', '_').replace('(', '').replace(')', '').lower()
+        symbol_clean = symbol.split('_')[0]
+        save_path = f"{save_dir}/{strategy_clean}_{symbol_clean}_analysis.png"
+
+        # 시각화
+        fig = plt.figure(figsize=(20, 14))
+        gs = fig.add_gridspec(4, 3, hspace=0.35, wspace=0.3)
+
+        # 1. 가격 차트 + 누적 수익률
+        ax1 = fig.add_subplot(gs[0, :2])
+        ax1_twin = ax1.twinx()
+
+        # 가격 (왼쪽 축)
+        ax1.plot(original_data.index, original_data['Close'],
+                label='Price', color='gray', linewidth=1.5, alpha=0.6)
+        ax1.set_ylabel('Price (KRW)', fontsize=11, color='gray')
+        ax1.tick_params(axis='y', labelcolor='gray')
+
+        # 누적 수익률 (오른쪽 축)
+        ax1_twin.plot(result_df.index, result_df['cumulative'],
+                     label='Cumulative Return', color='blue', linewidth=2.5)
+        ax1_twin.set_ylabel('Cumulative Return', fontsize=11, color='blue')
+        ax1_twin.tick_params(axis='y', labelcolor='blue')
+        ax1_twin.set_yscale('log')
+
+        ax1.set_title(f'{strategy_name} - {symbol_clean}: Price & Cumulative Returns',
+                     fontsize=14, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='upper left', fontsize=10)
+        ax1_twin.legend(loc='upper right', fontsize=10)
+
+        # 2. 매수/매도 신호 (포지션이 있는 경우)
+        ax2 = fig.add_subplot(gs[0, 2])
+        if 'position' in result_df.columns:
+            position_changes = result_df['position'].diff()
+            buy_signals = result_df[position_changes == 1].index
+            sell_signals = result_df[position_changes == -1].index
+
+            ax2.plot(original_data.index, original_data['Close'],
+                    color='gray', linewidth=1, alpha=0.5)
+            ax2.scatter(buy_signals, original_data.loc[buy_signals, 'Close'],
+                       color='green', marker='^', s=100, label='Buy', zorder=5, alpha=0.7)
+            ax2.scatter(sell_signals, original_data.loc[sell_signals, 'Close'],
+                       color='red', marker='v', s=100, label='Sell', zorder=5, alpha=0.7)
+            ax2.set_title('Entry/Exit Signals', fontsize=12, fontweight='bold')
+            ax2.set_ylabel('Price (KRW)', fontsize=10)
+            ax2.legend(fontsize=9)
+            ax2.set_yscale('log')
+        else:
+            ax2.text(0.5, 0.5, 'No position data\navailable',
+                    ha='center', va='center', fontsize=12, transform=ax2.transAxes)
+            ax2.set_title('Entry/Exit Signals', fontsize=12, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Drawdown 차트
+        ax3 = fig.add_subplot(gs[1, :])
+        cummax = result_df['cumulative'].cummax()
+        drawdown = (result_df['cumulative'] - cummax) / cummax * 100
+        ax3.fill_between(drawdown.index, drawdown, 0, color='red', alpha=0.3)
+        ax3.plot(drawdown.index, drawdown, color='darkred', linewidth=2)
+        ax3.set_title('Drawdown Over Time', fontsize=13, fontweight='bold')
+        ax3.set_ylabel('Drawdown (%)', fontsize=11)
+        ax3.set_xlabel('Date', fontsize=11)
+        ax3.grid(True, alpha=0.3)
+        ax3.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+
+        # MDD 표시
+        mdd_value = drawdown.min()
+        mdd_date = drawdown.idxmin()
+        ax3.scatter([mdd_date], [mdd_value], color='red', s=200, zorder=5, marker='X')
+        ax3.annotate(f'MDD: {mdd_value:.2f}%',
+                    xy=(mdd_date, mdd_value),
+                    xytext=(10, 10), textcoords='offset points',
+                    fontsize=10, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.7))
+
+        # 4. 월별 수익률 히트맵
+        ax4 = fig.add_subplot(gs[2, :2])
+        monthly_returns = result_df['returns'].resample('M').apply(lambda x: (1 + x).prod() - 1) * 100
+        monthly_returns_pivot = monthly_returns.to_frame('returns')
+        monthly_returns_pivot['year'] = monthly_returns_pivot.index.year
+        monthly_returns_pivot['month'] = monthly_returns_pivot.index.month
+        heatmap_data = monthly_returns_pivot.pivot(index='year', columns='month', values='returns')
+
+        # 히트맵 그리기
+        sns.heatmap(heatmap_data, annot=True, fmt='.1f', cmap='RdYlGn', center=0,
+                   cbar_kws={'label': 'Return (%)'}, ax=ax4, linewidths=0.5)
+        ax4.set_title('Monthly Returns Heatmap (%)', fontsize=13, fontweight='bold')
+        ax4.set_xlabel('Month', fontsize=11)
+        ax4.set_ylabel('Year', fontsize=11)
+
+        # 5. 수익률 분포
+        ax5 = fig.add_subplot(gs[2, 2])
+        returns_pct = result_df['returns'][result_df['returns'] != 0] * 100
+        if len(returns_pct) > 0:
+            ax5.hist(returns_pct, bins=50, color='steelblue', alpha=0.7, edgecolor='black')
+            ax5.axvline(x=0, color='red', linestyle='--', linewidth=2)
+            ax5.axvline(x=returns_pct.mean(), color='green', linestyle='--', linewidth=2,
+                       label=f'Mean: {returns_pct.mean():.2f}%')
+            ax5.set_title('Return Distribution', fontsize=12, fontweight='bold')
+            ax5.set_xlabel('Return (%)', fontsize=10)
+            ax5.set_ylabel('Frequency', fontsize=10)
+            ax5.legend(fontsize=9)
+            ax5.grid(True, alpha=0.3, axis='y')
+
+        # 6. 롤링 샤프 비율 (90일)
+        ax6 = fig.add_subplot(gs[3, 0])
+        rolling_window = 90
+        rolling_sharpe = (result_df['returns'].rolling(rolling_window).mean() /
+                         result_df['returns'].rolling(rolling_window).std() * np.sqrt(365))
+        ax6.plot(rolling_sharpe.index, rolling_sharpe, color='purple', linewidth=2)
+        ax6.axhline(y=0, color='red', linestyle='--', linewidth=1, alpha=0.5)
+        ax6.axhline(y=1, color='orange', linestyle='--', linewidth=1, alpha=0.5, label='Sharpe=1')
+        ax6.axhline(y=2, color='green', linestyle='--', linewidth=1, alpha=0.5, label='Sharpe=2')
+        ax6.set_title(f'Rolling Sharpe Ratio ({rolling_window}d)', fontsize=12, fontweight='bold')
+        ax6.set_ylabel('Sharpe Ratio', fontsize=10)
+        ax6.set_xlabel('Date', fontsize=10)
+        ax6.legend(fontsize=8)
+        ax6.grid(True, alpha=0.3)
+
+        # 7. 승률 분석
+        ax7 = fig.add_subplot(gs[3, 1])
+        winning_returns = result_df['returns'][result_df['returns'] > 0]
+        losing_returns = result_df['returns'][result_df['returns'] < 0]
+
+        win_count = len(winning_returns)
+        loss_count = len(losing_returns)
+        total_trades = win_count + loss_count
+
+        if total_trades > 0:
+            win_rate = win_count / total_trades * 100
+            avg_win = winning_returns.mean() * 100 if win_count > 0 else 0
+            avg_loss = losing_returns.mean() * 100 if loss_count > 0 else 0
+
+            bars = ax7.bar(['Wins', 'Losses'], [win_count, loss_count],
+                          color=['green', 'red'], alpha=0.7)
+            ax7.set_title('Win/Loss Analysis', fontsize=12, fontweight='bold')
+            ax7.set_ylabel('Number of Trades', fontsize=10)
+
+            # 값 표시
+            for bar in bars:
+                height = bar.get_height()
+                ax7.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{int(height)}',
+                        ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+            # 텍스트 정보
+            info_text = f'Win Rate: {win_rate:.1f}%\n'
+            info_text += f'Avg Win: {avg_win:.2f}%\n'
+            info_text += f'Avg Loss: {avg_loss:.2f}%\n'
+            info_text += f'Total Trades: {total_trades}'
+
+            ax7.text(0.98, 0.98, info_text, transform=ax7.transAxes,
+                    fontsize=9, verticalalignment='top', horizontalalignment='right',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        ax7.grid(True, alpha=0.3, axis='y')
+
+        # 8. 성과 지표 요약
+        ax8 = fig.add_subplot(gs[3, 2])
+        ax8.axis('off')
+
+        # 성과 지표 계산
+        metrics = self.calculate_metrics(result_df['returns'], f"{strategy_name} - {symbol_clean}")
+
+        metrics_text = f"Performance Metrics\n{'='*30}\n\n"
+        metrics_text += f"Total Return: {metrics['Total Return (%)']:.2f}%\n"
+        metrics_text += f"CAGR: {metrics['CAGR (%)']:.2f}%\n"
+        metrics_text += f"MDD: {metrics['MDD (%)']:.2f}%\n"
+        metrics_text += f"Sharpe Ratio: {metrics['Sharpe Ratio']:.2f}\n"
+        metrics_text += f"Win Rate: {metrics['Win Rate (%)']:.2f}%\n"
+        metrics_text += f"Total Trades: {metrics['Total Trades']}\n"
+
+        if metrics['Profit Factor'] != np.inf:
+            metrics_text += f"Profit Factor: {metrics['Profit Factor']:.2f}\n"
+        else:
+            metrics_text += f"Profit Factor: N/A\n"
+
+        ax8.text(0.1, 0.95, metrics_text, transform=ax8.transAxes,
+                fontsize=11, verticalalignment='top', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
+
+        # 전체 제목
+        fig.suptitle(f'{strategy_name} - {symbol_clean} Detailed Analysis\n'
+                    f'Period: {self.start_date} to {self.end_date}',
+                    fontsize=16, fontweight='bold', y=0.995)
+
+        # 저장
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"  Chart saved: {save_path}")
+        plt.close()
+
+        return save_path
+
+    def plot_all_individual_analyses(self, save_dir='individual_results'):
+        """모든 전략-종목 조합에 대해 개별 분석 시각화 생성"""
+        print("\n" + "="*80)
+        print("Creating individual ticker analysis charts...")
+        print("="*80 + "\n")
+
+        saved_files = []
+
+        for strategy_name in self.strategy_results.keys():
+            print(f"\n>>> Processing {strategy_name}...")
+            for symbol in self.symbols:
+                print(f"  - {symbol}...")
+                save_path = self.plot_individual_ticker_analysis(strategy_name, symbol, save_dir)
+                saved_files.append(save_path)
+
+        print("\n" + "="*80)
+        print(f"Individual analysis completed! {len(saved_files)} charts saved.")
+        print(f"Location: {save_dir}/")
+        print("="*80 + "\n")
+
+        return saved_files
+
     def print_metrics_table(self, metrics_df):
         """성과 지표 테이블 출력"""
         print("\n" + "="*150)
@@ -495,8 +726,12 @@ class CryptoPortfolioComparisonFixed:
 
         print("\n" + "="*150 + "\n")
 
-    def run_analysis(self):
-        """전체 분석 실행"""
+    def run_analysis(self, create_individual_charts=True):
+        """전체 분석 실행
+
+        Args:
+            create_individual_charts: 개별 종목 차트 생성 여부 (default: True)
+        """
         # 1. 데이터 로드
         self.load_data()
 
@@ -512,8 +747,12 @@ class CryptoPortfolioComparisonFixed:
         # 5. 결과 출력
         self.print_metrics_table(metrics_df)
 
-        # 6. 시각화
+        # 6. 포트폴리오 비교 시각화
         self.plot_comparison(metrics_df)
+
+        # 7. 개별 종목 시각화 (옵션)
+        if create_individual_charts:
+            self.plot_all_individual_analyses()
 
         return metrics_df
 
