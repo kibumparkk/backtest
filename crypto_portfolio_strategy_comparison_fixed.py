@@ -803,6 +803,125 @@ class CryptoPortfolioComparisonFixed:
 
         return saved_files
 
+    def create_auto_rebalancing_portfolio(self):
+        """거래 시점 자동 리밸런싱 포트폴리오
+
+        각 매매 신호 발생 시 전체 평가액의 1/n을 해당 종목에 자동 투자
+        - 매수 신호: 현재 총 평가액의 1/종목수 만큼 매수
+        - 매도 신호: 해당 종목 포지션 전량 청산
+        - 매우 현실적인 자동매매 로직
+        """
+        print("\n" + "="*80)
+        print("Creating Auto-Rebalancing Portfolio (Trade-time Rebalancing)...")
+        print("="*80 + "\n")
+
+        results = {}
+        n_symbols = len(self.symbols)
+        target_weight = 1.0 / n_symbols
+
+        for strategy_name in self.strategy_results.keys():
+            print(f"\n>>> Processing {strategy_name}...")
+
+            # 공통 날짜 인덱스
+            all_indices = [self.strategy_results[strategy_name][symbol].index
+                          for symbol in self.symbols]
+            common_index = all_indices[0]
+            for idx in all_indices[1:]:
+                common_index = common_index.intersection(idx)
+
+            # 각 종목의 포지션과 수익률 데이터 가져오기
+            positions = {}
+            cumulative_data = {}
+
+            for symbol in self.symbols:
+                df = self.strategy_results[strategy_name][symbol].loc[common_index].copy()
+
+                # 포지션 정보 (있으면 사용, 없으면 signal에서 생성)
+                if 'position' in df.columns:
+                    positions[symbol] = df['position'].copy()
+                elif 'signal' in df.columns:
+                    positions[symbol] = df['signal'].copy()
+                else:
+                    # 수익률이 0이 아니면 포지션 있다고 가정
+                    positions[symbol] = (df['returns'] != 0).astype(int)
+
+                cumulative_data[symbol] = df['cumulative'].ffill().fillna(1.0)
+
+            # 포트폴리오 시뮬레이션
+            cash = 1.0  # 초기 현금
+            holdings = {symbol: 0.0 for symbol in self.symbols}  # 각 종목 보유 주식 수 (비율)
+            holding_values = {symbol: 0.0 for symbol in self.symbols}  # 각 종목 평가액
+
+            portfolio_values = pd.Series(index=common_index, dtype=float)
+            portfolio_values.iloc[0] = 1.0
+
+            for i, date in enumerate(common_index):
+                if i == 0:
+                    continue
+
+                prev_date = common_index[i-1]
+
+                # 1. 보유 종목 가치 업데이트 (가격 변동 반영)
+                for symbol in self.symbols:
+                    if holdings[symbol] > 0:
+                        # 전날 대비 가격 변동률
+                        if cumulative_data[symbol].loc[prev_date] != 0:
+                            price_ratio = cumulative_data[symbol].loc[date] / cumulative_data[symbol].loc[prev_date]
+                        else:
+                            price_ratio = 1.0
+                        holding_values[symbol] = holding_values[symbol] * price_ratio
+
+                # 2. 각 종목의 포지션 변화 확인 및 매매 실행
+                for symbol in self.symbols:
+                    prev_position = positions[symbol].loc[prev_date] if i > 0 else 0
+                    curr_position = positions[symbol].loc[date]
+
+                    # 매수 신호 (0 -> 1)
+                    if curr_position == 1 and prev_position == 0:
+                        # 현재 총 평가액 계산
+                        total_value = cash + sum(holding_values.values())
+
+                        # 목표 투자액 = 총 평가액 × (1/종목수)
+                        target_amount = total_value * target_weight
+
+                        # 슬리피지 포함 매수
+                        buy_cost = target_amount * (1 + self.slippage)
+
+                        if cash >= buy_cost:
+                            cash -= buy_cost
+                            holding_values[symbol] = target_amount
+                            holdings[symbol] = 1.0  # 포지션 보유 표시
+
+                    # 매도 신호 (1 -> 0)
+                    elif curr_position == 0 and prev_position == 1:
+                        if holdings[symbol] > 0:
+                            # 슬리피지 포함 매도
+                            sell_amount = holding_values[symbol] * (1 - self.slippage)
+                            cash += sell_amount
+                            holding_values[symbol] = 0.0
+                            holdings[symbol] = 0.0
+
+                # 3. 총 평가액 기록
+                total_value = cash + sum(holding_values.values())
+                portfolio_values.loc[date] = total_value
+
+            # 수익률 계산
+            portfolio_returns = portfolio_values.pct_change().fillna(0)
+
+            # 결과 저장
+            results[strategy_name] = pd.DataFrame({
+                'returns': portfolio_returns,
+                'cumulative': portfolio_values
+            }, index=common_index)
+
+            print(f"  Completed: Final value = {portfolio_values.iloc[-1]:.2f}x")
+
+        print("\n" + "="*80)
+        print("Auto-Rebalancing Portfolio creation completed!")
+        print("="*80 + "\n")
+
+        return results
+
     def compare_rebalancing_strategies(self):
         """다양한 리밸런싱 전략 비교 분석"""
         print("\n" + "="*80)
@@ -812,6 +931,10 @@ class CryptoPortfolioComparisonFixed:
         # 다양한 리밸런싱 전략으로 포트폴리오 생성
         rebalancing_results = {}
         rebalancing_results['Daily'] = self.portfolio_results  # 기존 매일 리밸런싱 결과
+
+        # 자동 리밸런싱 (거래 시점)
+        auto_rebal_results = self.create_auto_rebalancing_portfolio()
+        rebalancing_results['Auto (Trade-time)'] = auto_rebal_results
 
         for freq in ['BH', 'Y', 'Q', 'M']:
             results = self.create_rebalancing_portfolios(rebalance_freq=freq, rebalance_cost=0.001)
@@ -857,7 +980,7 @@ class CryptoPortfolioComparisonFixed:
         gs = fig.add_gridspec(4, 3, hspace=0.35, wspace=0.3)
 
         strategies = list(self.strategy_results.keys())
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
         rebal_methods = list(self.rebalancing_results.keys())
 
         # 1-3. 각 전략별 리밸런싱 효과 비교
