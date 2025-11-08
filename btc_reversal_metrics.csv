@@ -1,0 +1,11 @@
+Strategy,Total Return (%),CAGR (%),MDD (%),Sharpe Ratio,Win Rate (%),Total Trades,Profit Factor
+7. RSI Divergence,-53.03,-6.43,-70.92,-0.05,48.65,630,0.98
+2. Bollinger Bands Mean Reversion,-56.55,-7.07,-80.17,-0.07,48.94,615,0.98
+9. Z-Score Mean Reversion,-56.55,-7.07,-80.17,-0.07,48.94,615,0.98
+10. ROC Reversal (15%),-63.95,-8.58,-84.4,-0.13,49.38,564,0.96
+1. RSI Reversal (30/70),-68.28,-9.61,-84.82,-0.12,47.94,654,0.96
+4. Stochastic Reversal,-69.95,-10.04,-85.58,-0.17,48.25,586,0.95
+8. MFI Reversal,-70.58,-10.2,-82.02,-0.19,48.51,552,0.94
+3. Williams %R Reversal,-72.8,-10.82,-83.55,-0.17,47.05,662,0.95
+5. CCI Reversal,-75.7,-11.7,-86.36,-0.2,47.48,675,0.94
+6. MA Distance Reversal (10%),-76.25,-11.88,-83.35,-0.23,48.56,520,0.93
