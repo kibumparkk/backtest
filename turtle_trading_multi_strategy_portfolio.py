@@ -272,24 +272,25 @@ class MultiStrategyPortfolioAnalyzer:
         colors = plt.cm.Set3(np.linspace(0, 1, len(strategy_names)))
         portfolio_color = 'red'
 
-        # 1. 누적 수익률 (큰 차트)
+        # 1. 누적 수익률 (큰 차트) - 1원 시작 기준, Log Scale
         ax1 = fig.add_subplot(gs[0:2, :])
         for idx, strategy_name in enumerate(strategy_names):
             cumulative = self.strategy_results[strategy_name]['cumulative']
-            ax1.plot(cumulative.index, (cumulative - 1) * 100,
+            ax1.plot(cumulative.index, cumulative,
                     label=strategy_name, linewidth=1.5, alpha=0.7, color=colors[idx])
 
         # 포트폴리오
         portfolio_cumulative = self.portfolio_results['cumulative']
-        ax1.plot(portfolio_cumulative.index, (portfolio_cumulative - 1) * 100,
+        ax1.plot(portfolio_cumulative.index, portfolio_cumulative,
                 label='Multi-Strategy Portfolio', linewidth=3, color=portfolio_color)
 
-        ax1.set_title('Cumulative Returns Comparison', fontsize=16, fontweight='bold', pad=20)
+        ax1.set_title('Cumulative PnL (Starting from 1 KRW, Log Scale)', fontsize=16, fontweight='bold', pad=20)
         ax1.set_xlabel('Date', fontsize=12)
-        ax1.set_ylabel('Cumulative Return (%)', fontsize=12)
+        ax1.set_ylabel('Portfolio Value (KRW)', fontsize=12)
+        ax1.set_yscale('log')
         ax1.legend(loc='upper left', fontsize=10)
-        ax1.grid(alpha=0.3)
-        ax1.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        ax1.grid(alpha=0.3, which='both')
+        ax1.axhline(y=1, color='black', linestyle='-', linewidth=0.5)
 
         # 2. Drawdown (큰 차트)
         ax2 = fig.add_subplot(gs[2, :])
