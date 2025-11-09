@@ -35,7 +35,7 @@ class MultiStrategyPortfolioAnalyzer:
         self.strategy_results = {}
         self.portfolio_results = {}
 
-    def load_data(self, symbols, start_date='2018-01-01'):
+    def load_data(self, symbols, start_date=None):
         """데이터 로드"""
         print("\n" + "="*80)
         print("Loading data...")
@@ -46,9 +46,10 @@ class MultiStrategyPortfolioAnalyzer:
             if file_path.exists():
                 df = pd.read_parquet(file_path)
                 df.index = pd.to_datetime(df.index)
-                df = df[df.index >= start_date]
+                if start_date:
+                    df = df[df.index >= start_date]
                 self.data[symbol] = df
-                print(f"  - Loaded {symbol}: {len(df)} rows")
+                print(f"  - Loaded {symbol}: {len(df)} rows, {df.index[0].date()} ~ {df.index[-1].date()}")
             else:
                 print(f"  - WARNING: {symbol} file not found!")
 
@@ -465,7 +466,7 @@ def main():
 
     # 기본 설정
     SYMBOLS = ['BTC_KRW', 'ETH_KRW', 'ADA_KRW', 'XRP_KRW']
-    START_DATE = '2018-01-01'
+    START_DATE = None  # None = 전체 데이터 구간 사용
     SLIPPAGE = 0.002
 
     # 선별된 전략 (최적 파라미터 조합)
@@ -481,7 +482,7 @@ def main():
     print("TURTLE TRADING MULTI-STRATEGY PORTFOLIO ANALYSIS")
     print("="*80)
     print(f"\nAssets: {SYMBOLS}")
-    print(f"Start Date: {START_DATE}")
+    print(f"Start Date: {START_DATE if START_DATE else 'Full Data Range (earliest available)'}")
     print(f"Slippage: {SLIPPAGE*100:.1f}%")
     print(f"\nSelected Strategies: {len(STRATEGY_CONFIGS)}")
     for name, (entry, exit) in STRATEGY_CONFIGS.items():

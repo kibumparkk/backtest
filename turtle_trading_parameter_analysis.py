@@ -46,7 +46,7 @@ class TurtleTradingParameterAnalyzer:
         self.data = {}
         self.results = []
 
-    def load_data(self, symbols, start_date='2018-01-01'):
+    def load_data(self, symbols, start_date=None):
         """데이터 로드"""
         print("\n" + "="*80)
         print("Loading data...")
@@ -57,7 +57,8 @@ class TurtleTradingParameterAnalyzer:
             if file_path.exists():
                 df = pd.read_parquet(file_path)
                 df.index = pd.to_datetime(df.index)
-                df = df[df.index >= start_date]
+                if start_date:
+                    df = df[df.index >= start_date]
                 self.data[symbol] = df
                 print(f"  - Loaded {symbol}: {len(df)} rows, {df.index[0].date()} ~ {df.index[-1].date()}")
             else:
@@ -444,7 +445,7 @@ def main():
 
     # 파라미터 설정
     SYMBOLS = ['BTC_KRW', 'ETH_KRW', 'ADA_KRW', 'XRP_KRW']
-    START_DATE = '2018-01-01'
+    START_DATE = None  # None = 전체 데이터 구간 사용
     SLIPPAGE = 0.002
 
     # 테스트할 파라미터 범위
@@ -456,7 +457,7 @@ def main():
     print("TURTLE TRADING PARAMETER OPTIMIZATION ANALYSIS")
     print("="*80)
     print(f"\nSymbols: {SYMBOLS}")
-    print(f"Start Date: {START_DATE}")
+    print(f"Start Date: {START_DATE if START_DATE else 'Full Data Range (earliest available)'}")
     print(f"Slippage: {SLIPPAGE*100:.1f}%")
     print(f"\nEntry Periods to test: {ENTRY_PERIODS}")
     print(f"Exit Periods to test: {EXIT_PERIODS}")
