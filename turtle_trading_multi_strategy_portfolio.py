@@ -56,7 +56,13 @@ class MultiStrategyPortfolioAnalyzer:
         print(f"\nTotal symbols loaded: {len(self.data)}")
 
     def strategy_turtle_trading(self, df, entry_period=20, exit_period=10):
-        """터틀 트레이딩 전략"""
+        """
+        터틀 트레이딩 전략 (매일 미실현 손익 반영)
+
+        수정사항:
+        - 포지션 보유 기간 동안 매일 일일 수익률 계산
+        - MDD가 정확히 반영되도록 개선
+        """
         df = df.copy()
 
         # 터틀 채널
@@ -76,21 +82,24 @@ class MultiStrategyPortfolioAnalyzer:
             elif df.iloc[i]['low'] < df.iloc[i]['exit_low'] and df.iloc[i-1]['position'] == 1:
                 df.iloc[i, df.columns.get_loc('position')] = 0
 
-        # 수익률 계산
-        df['returns'] = 0.0
-        df['buy_price'] = np.nan
+        # 포지션 변화 감지
+        df['position_change'] = df['position'].diff()
 
-        for i in range(1, len(df)):
-            if df.iloc[i]['position'] == 1 and df.iloc[i-1]['position'] == 0:
-                df.iloc[i, df.columns.get_loc('buy_price')] = df.iloc[i]['close'] * (1 + self.slippage)
-            elif df.iloc[i]['position'] == 0 and df.iloc[i-1]['position'] == 1:
-                buy_price = df.iloc[i-1]['buy_price'] if pd.notna(df.iloc[i-1]['buy_price']) else df.iloc[i-1]['close']
-                sell_price = df.iloc[i]['close'] * (1 - self.slippage)
-                df.iloc[i, df.columns.get_loc('returns')] = (sell_price / buy_price - 1)
-            elif df.iloc[i]['position'] == 1:
-                if pd.notna(df.iloc[i-1]['buy_price']):
-                    df.iloc[i, df.columns.get_loc('buy_price')] = df.iloc[i-1]['buy_price']
+        # 일일 수익률 계산 (매일 업데이트)
+        df['daily_price_return'] = df['close'].pct_change()
+        df['returns'] = df['position'].shift(1) * df['daily_price_return']
 
+        # 매수/매도 시 슬리피지 적용
+        slippage_cost = pd.Series(0.0, index=df.index)
+        slippage_cost[df['position_change'] == 1] = -self.slippage  # 매수
+        slippage_cost[df['position_change'] == -1] = -self.slippage  # 매도
+
+        df['returns'] = df['returns'] + slippage_cost
+
+        # NaN 값 처리
+        df['returns'] = df['returns'].fillna(0)
+
+        # 누적 수익률
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
