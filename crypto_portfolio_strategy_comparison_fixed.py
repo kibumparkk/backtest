@@ -1,10 +1,11 @@
 """
 암호화폐 포트폴리오 전략 비교 분석 (수정 버전)
 
-세 가지 전략을 BTC, ETH, ADA, XRP에 적용하여 동일 비중 포트폴리오 성과 비교:
+네 가지 전략을 BTC, ETH, ADA, XRP에 적용하여 동일 비중 포트폴리오 성과 비교:
 1. Turtle Trading (터틀트레이딩) - ✅ 현실적인 체결 가격으로 수정
 2. RSI 55 전략
 3. SMA 30 전략
+4. Support/Resistance (지지선/저항선) 전략
 
 각 전략은 4개 종목에 25%씩 동일 비중 투자
 """
@@ -196,13 +197,76 @@ class CryptoPortfolioComparisonFixed:
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
+    # ==================== 전략 4: Support/Resistance ====================
+    def strategy_support_resistance(self, df, lookback_period=20, tolerance=0.02):
+        """
+        지지선/저항선 전략
+        - 롤링 윈도우로 지지선(최저가)과 저항선(최고가) 계산
+        - 가격이 지지선 근처에 있을 때 매수
+        - 가격이 저항선 근처에 있을 때 매도
+
+        Args:
+            lookback_period: 지지선/저항선 계산 기간 (default: 20일)
+            tolerance: 매수/매도 신호 트리거 범위 (default: 0.02 = 2%)
+        """
+        df = df.copy()
+
+        # 지지선과 저항선 계산
+        df['support'] = df['Low'].rolling(window=lookback_period).min().shift(1)
+        df['resistance'] = df['High'].rolling(window=lookback_period).max().shift(1)
+
+        # 포지션 관리
+        df['position'] = 0
+        df['buy_price'] = np.nan
+
+        for i in range(1, len(df)):
+            # 이전 포지션 유지
+            df.iloc[i, df.columns.get_loc('position')] = df.iloc[i-1, df.columns.get_loc('position')]
+
+            current_price = df.iloc[i]['Close']
+            support = df.iloc[i]['support']
+            resistance = df.iloc[i]['resistance']
+
+            # NaN 체크
+            if pd.isna(support) or pd.isna(resistance):
+                continue
+
+            # 매수 신호: 가격이 지지선 근처 (지지선 + tolerance% 이하)
+            if current_price <= support * (1 + tolerance) and df.iloc[i-1]['position'] == 0:
+                df.iloc[i, df.columns.get_loc('position')] = 1
+                # 당일 종가에 매수 (슬리피지 포함)
+                df.iloc[i, df.columns.get_loc('buy_price')] = current_price * (1 + self.slippage)
+
+            # 매도 신호: 가격이 저항선 근처 (저항선 - tolerance% 이상)
+            elif current_price >= resistance * (1 - tolerance) and df.iloc[i-1]['position'] == 1:
+                df.iloc[i, df.columns.get_loc('position')] = 0
+
+            # 포지션 유지 시 매수가 유지
+            elif df.iloc[i]['position'] == 1 and pd.notna(df.iloc[i-1]['buy_price']):
+                df.iloc[i, df.columns.get_loc('buy_price')] = df.iloc[i-1]['buy_price']
+
+        # 수익률 계산
+        df['returns'] = 0.0
+
+        for i in range(1, len(df)):
+            # 매도 시 수익률 계산
+            if df.iloc[i]['position'] == 0 and df.iloc[i-1]['position'] == 1:
+                buy_price = df.iloc[i-1]['buy_price'] if pd.notna(df.iloc[i-1]['buy_price']) else df.iloc[i-1]['Close']
+                sell_price = df.iloc[i]['Close'] * (1 - self.slippage)
+                df.iloc[i, df.columns.get_loc('returns')] = (sell_price / buy_price - 1)
+
+        # 누적 수익률
+        df['cumulative'] = (1 + df['returns']).cumprod()
+        return df
+
     # ==================== 전략 실행 ====================
     def run_all_strategies(self):
         """모든 전략을 모든 종목에 대해 실행"""
         strategies = {
             'Turtle Trading (Fixed)': lambda df: self.strategy_turtle_trading(df, entry_period=20, exit_period=10),
             'RSI 55': lambda df: self.strategy_rsi_55(df, rsi_period=14, rsi_threshold=55),
-            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30)
+            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30),
+            'Support/Resistance': lambda df: self.strategy_support_resistance(df, lookback_period=20, tolerance=0.02)
         }
 
         print("\n" + "="*80)
@@ -327,8 +391,8 @@ class CryptoPortfolioComparisonFixed:
     # ==================== 시각화 ====================
     def plot_comparison(self, metrics_df, save_path='crypto_portfolio_comparison_fixed.png'):
         """포트폴리오 비교 시각화"""
-        fig = plt.figure(figsize=(20, 16))
-        gs = fig.add_gridspec(5, 3, hspace=0.35, wspace=0.3)
+        fig = plt.figure(figsize=(20, 20))
+        gs = fig.add_gridspec(6, 4, hspace=0.35, wspace=0.3)
 
         # 1. 포트폴리오 누적 수익률 비교
         ax1 = fig.add_subplot(gs[0, :])
@@ -410,10 +474,10 @@ class CryptoPortfolioComparisonFixed:
         ax7.set_title('Profit Factor Comparison', fontsize=13, fontweight='bold')
         ax7.grid(True, alpha=0.3, axis='x')
 
-        # 8-10. 각 전략별 종목 비교
+        # 8-11. 각 전략별 종목 비교
         turtle_metrics = metrics_df[metrics_df['Strategy'].str.contains('Turtle Trading')].copy()
         if len(turtle_metrics) > 0:
-            ax8 = fig.add_subplot(gs[3, 0])
+            ax8 = fig.add_subplot(gs[3, 0:2])
             sorted_df = turtle_metrics.sort_values('Total Return (%)', ascending=True)
             colors = ['green' if x > 0 else 'red' for x in sorted_df['Total Return (%)']]
             strategy_labels = [s.replace('Turtle Trading (Fixed) - ', '') for s in sorted_df['Strategy']]
@@ -424,7 +488,7 @@ class CryptoPortfolioComparisonFixed:
 
         rsi_metrics = metrics_df[metrics_df['Strategy'].str.contains('RSI 55')].copy()
         if len(rsi_metrics) > 0:
-            ax9 = fig.add_subplot(gs[3, 1])
+            ax9 = fig.add_subplot(gs[3, 2:4])
             sorted_df = rsi_metrics.sort_values('Total Return (%)', ascending=True)
             colors = ['green' if x > 0 else 'red' for x in sorted_df['Total Return (%)']]
             strategy_labels = [s.replace('RSI 55 - ', '') for s in sorted_df['Strategy']]
@@ -435,7 +499,7 @@ class CryptoPortfolioComparisonFixed:
 
         sma_metrics = metrics_df[metrics_df['Strategy'].str.contains('SMA 30')].copy()
         if len(sma_metrics) > 0:
-            ax10 = fig.add_subplot(gs[3, 2])
+            ax10 = fig.add_subplot(gs[4, 0:2])
             sorted_df = sma_metrics.sort_values('Total Return (%)', ascending=True)
             colors = ['green' if x > 0 else 'red' for x in sorted_df['Total Return (%)']]
             strategy_labels = [s.replace('SMA 30 - ', '') for s in sorted_df['Strategy']]
@@ -444,20 +508,31 @@ class CryptoPortfolioComparisonFixed:
             ax10.set_title('SMA 30 - By Asset', fontsize=12, fontweight='bold')
             ax10.grid(True, alpha=0.3, axis='x')
 
-        # 11. 드로우다운 비교
-        ax11 = fig.add_subplot(gs[4, :])
+        sr_metrics = metrics_df[metrics_df['Strategy'].str.contains('Support/Resistance')].copy()
+        if len(sr_metrics) > 0:
+            ax11 = fig.add_subplot(gs[4, 2:4])
+            sorted_df = sr_metrics.sort_values('Total Return (%)', ascending=True)
+            colors = ['green' if x > 0 else 'red' for x in sorted_df['Total Return (%)']]
+            strategy_labels = [s.replace('Support/Resistance - ', '') for s in sorted_df['Strategy']]
+            ax11.barh(strategy_labels, sorted_df['Total Return (%)'], color=colors, alpha=0.7)
+            ax11.set_xlabel('Total Return (%)', fontsize=10)
+            ax11.set_title('Support/Resistance - By Asset', fontsize=12, fontweight='bold')
+            ax11.grid(True, alpha=0.3, axis='x')
+
+        # 12. 드로우다운 비교
+        ax12 = fig.add_subplot(gs[5, :])
         for strategy_name in self.portfolio_results.keys():
             cumulative = self.portfolio_results[strategy_name]['cumulative']
             cummax = cumulative.cummax()
             drawdown = (cumulative - cummax) / cummax * 100
-            ax11.plot(drawdown.index, drawdown, label=f'{strategy_name}', linewidth=2, alpha=0.7)
+            ax12.plot(drawdown.index, drawdown, label=f'{strategy_name}', linewidth=2, alpha=0.7)
 
-        ax11.fill_between(drawdown.index, drawdown, 0, alpha=0.2)
-        ax11.set_title('Portfolio Drawdown Over Time', fontsize=14, fontweight='bold')
-        ax11.set_ylabel('Drawdown (%)', fontsize=12)
-        ax11.set_xlabel('Date', fontsize=12)
-        ax11.legend(loc='lower right', fontsize=11)
-        ax11.grid(True, alpha=0.3)
+        ax12.fill_between(drawdown.index, drawdown, 0, alpha=0.2)
+        ax12.set_title('Portfolio Drawdown Over Time', fontsize=14, fontweight='bold')
+        ax12.set_ylabel('Drawdown (%)', fontsize=12)
+        ax12.set_xlabel('Date', fontsize=12)
+        ax12.legend(loc='lower right', fontsize=11)
+        ax12.grid(True, alpha=0.3)
 
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"\nChart saved to {save_path}")
@@ -479,7 +554,7 @@ class CryptoPortfolioComparisonFixed:
         original_data = self.data[symbol].copy()
 
         # 파일명 생성
-        strategy_clean = strategy_name.replace(' ', '_').replace('(', '').replace(')', '').lower()
+        strategy_clean = strategy_name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_').lower()
         symbol_clean = symbol.split('_')[0]
         save_path = f"{save_dir}/{strategy_clean}_{symbol_clean}_analysis.png"
 
@@ -781,7 +856,7 @@ def main():
 
     # 각 포트폴리오 상세 결과 저장
     for strategy_name in comparison.portfolio_results.keys():
-        filename = f"portfolio_{strategy_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}.csv"
+        filename = f"portfolio_{strategy_name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_').lower()}.csv"
         comparison.portfolio_results[strategy_name].to_csv(filename)
         print(f"Portfolio details saved to {filename}")
 
