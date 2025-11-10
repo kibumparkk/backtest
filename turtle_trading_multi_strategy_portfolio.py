@@ -94,6 +94,50 @@ class MultiStrategyPortfolioAnalyzer:
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
+    def strategy_sma(self, df, sma_period=30):
+        """
+        SMA 교차 전략
+
+        Parameters:
+        -----------
+        df : DataFrame
+            OHLCV 데이터
+        sma_period : int
+            SMA 기간
+
+        Returns:
+        --------
+        DataFrame : 전략 결과
+        """
+        df = df.copy()
+
+        # SMA 계산
+        df['sma'] = df['close'].rolling(window=sma_period).mean()
+
+        # 포지션 계산 (가격 >= SMA: 매수, 가격 < SMA: 매도)
+        df['position'] = np.where(df['close'] >= df['sma'], 1, 0)
+
+        # 포지션 변화 감지
+        df['position_change'] = df['position'].diff()
+
+        # 일일 수익률 계산
+        df['daily_price_return'] = df['close'].pct_change()
+        df['returns'] = df['position'].shift(1) * df['daily_price_return']
+
+        # 매수/매도 시 슬리피지 적용
+        slippage_cost = pd.Series(0.0, index=df.index)
+        slippage_cost[df['position_change'] == 1] = -self.slippage  # 매수
+        slippage_cost[df['position_change'] == -1] = -self.slippage  # 매도
+
+        df['returns'] = df['returns'] + slippage_cost
+
+        # NaN 값 처리
+        df['returns'] = df['returns'].fillna(0)
+
+        # 누적 수익률
+        df['cumulative'] = (1 + df['returns']).cumprod()
+        return df
+
     def run_strategies(self, symbols, strategy_configs):
         """
         여러 전략 실행
@@ -103,21 +147,38 @@ class MultiStrategyPortfolioAnalyzer:
         symbols : list
             종목 리스트
         strategy_configs : dict
-            전략 설정 딕셔너리 {strategy_name: (entry_period, exit_period)}
+            전략 설정 딕셔너리
+            Turtle: {strategy_name: ('turtle', entry_period, exit_period)}
+            SMA: {strategy_name: ('sma', sma_period)}
         """
         print("\n" + "="*80)
         print("Running Multiple Strategies...")
         print("="*80)
 
-        for strategy_name, (entry_period, exit_period) in strategy_configs.items():
-            print(f"\n>>> Running {strategy_name} (Entry={entry_period}, Exit={exit_period})...")
+        for strategy_name, config in strategy_configs.items():
+            strategy_type = config[0]
 
-            # 각 종목별로 전략 실행
-            symbol_results = {}
-            for symbol in symbols:
-                df = self.data[symbol].copy()
-                result = self.strategy_turtle_trading(df, entry_period, exit_period)
-                symbol_results[symbol] = result
+            if strategy_type == 'turtle':
+                entry_period, exit_period = config[1], config[2]
+                print(f"\n>>> Running {strategy_name} (Entry={entry_period}, Exit={exit_period})...")
+
+                # 각 종목별로 전략 실행
+                symbol_results = {}
+                for symbol in symbols:
+                    df = self.data[symbol].copy()
+                    result = self.strategy_turtle_trading(df, entry_period, exit_period)
+                    symbol_results[symbol] = result
+
+            elif strategy_type == 'sma':
+                sma_period = config[1]
+                print(f"\n>>> Running {strategy_name} (SMA={sma_period})...")
+
+                # 각 종목별로 전략 실행
+                symbol_results = {}
+                for symbol in symbols:
+                    df = self.data[symbol].copy()
+                    result = self.strategy_sma(df, sma_period)
+                    symbol_results[symbol] = result
 
             # 포트폴리오 수익률 계산 (동일 비중)
             weight = 1.0 / len(symbols)
@@ -141,8 +202,7 @@ class MultiStrategyPortfolioAnalyzer:
             self.strategy_results[strategy_name] = {
                 'returns': portfolio_returns,
                 'cumulative': cumulative,
-                'entry_period': entry_period,
-                'exit_period': exit_period
+                'config': config
             }
 
             print(f"  - Strategy completed")
@@ -158,9 +218,11 @@ class MultiStrategyPortfolioAnalyzer:
 
         print(f"\nCombining {num_strategies} strategies:")
         for name in strategy_names:
-            entry = self.strategy_results[name]['entry_period']
-            exit = self.strategy_results[name]['exit_period']
-            print(f"  - {name}: Entry={entry}, Exit={exit}")
+            config = self.strategy_results[name]['config']
+            if config[0] == 'turtle':
+                print(f"  - {name}: Turtle (Entry={config[1]}, Exit={config[2]})")
+            elif config[0] == 'sma':
+                print(f"  - {name}: SMA (Period={config[1]})")
 
         # 공통 날짜 인덱스
         all_indices = [self.strategy_results[name]['returns'].index for name in strategy_names]
@@ -470,23 +532,29 @@ def main():
     SLIPPAGE = 0.002
 
     # 선별된 전략 (최적 파라미터 조합)
+    # Format: {name: ('turtle', entry_period, exit_period)} or {name: ('sma', period)}
     STRATEGY_CONFIGS = {
-        'Aggressive (E10/X20)': (10, 20),      # 최고 CAGR
-        'Conservative (E55/X5)': (55, 5),      # 최고 Sharpe/Calmar, 최소 MDD
-        'Balanced (E25/X10)': (25, 10),        # 균형잡힌 전략
-        'High Sharpe (E15/X10)': (15, 10),     # 높은 Sharpe, 좋은 CAGR
-        'Low Risk (E30/X10)': (30, 10),        # 낮은 MDD, 좋은 Calmar
+        'Aggressive (E10/X20)': ('turtle', 10, 20),      # 최고 CAGR
+        'Conservative (E55/X5)': ('turtle', 55, 5),      # 최고 Sharpe/Calmar, 최소 MDD
+        'Balanced (E25/X10)': ('turtle', 25, 10),        # 균형잡힌 전략
+        'High Sharpe (E15/X10)': ('turtle', 15, 10),     # 높은 Sharpe, 좋은 CAGR
+        'Low Risk (E30/X10)': ('turtle', 30, 10),        # 낮은 MDD, 좋은 Calmar
+        'SMA 20': ('sma', 20),                           # SMA 20일 전략
+        'SMA 30': ('sma', 30),                           # SMA 30일 전략
     }
 
     print("\n" + "="*80)
-    print("TURTLE TRADING MULTI-STRATEGY PORTFOLIO ANALYSIS")
+    print("MULTI-STRATEGY PORTFOLIO ANALYSIS (Turtle + SMA)")
     print("="*80)
     print(f"\nAssets: {SYMBOLS}")
     print(f"Start Date: {START_DATE if START_DATE else 'Full Data Range (earliest available)'}")
     print(f"Slippage: {SLIPPAGE*100:.1f}%")
     print(f"\nSelected Strategies: {len(STRATEGY_CONFIGS)}")
-    for name, (entry, exit) in STRATEGY_CONFIGS.items():
-        print(f"  - {name}: Entry={entry}, Exit={exit}")
+    for name, config in STRATEGY_CONFIGS.items():
+        if config[0] == 'turtle':
+            print(f"  - {name}: Turtle (Entry={config[1]}, Exit={config[2]})")
+        elif config[0] == 'sma':
+            print(f"  - {name}: SMA (Period={config[1]})")
 
     # 분석 객체 생성
     analyzer = MultiStrategyPortfolioAnalyzer(slippage=SLIPPAGE)
