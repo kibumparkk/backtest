@@ -14,7 +14,7 @@
 6. Donchian Channel
 7. MA Slope (이동평균 기울기)
 8. Parabolic SAR
-9. Supertrend
+9. SMA30 Above (전일종가 > SMA30)
 10. Triple EMA (Fast/Medium/Slow)
 """
 
@@ -456,48 +456,23 @@ class TrendFollowingStrategies:
 
         return df
 
-    # ==================== Strategy 9: Supertrend ====================
-    def calculate_supertrend(self, df, period=10, multiplier=3):
-        """Supertrend 계산"""
+    # ==================== Strategy 9: SMA30 Above ====================
+    def strategy_sma30_above(self, df, period=30):
+        """
+        SMA30 Above 전략
+        - 전일 종가가 SMA30보다 크면 매수
+        - 전일 종가가 SMA30보다 작거나 같으면 매도
+        """
         df = df.copy()
 
-        # ATR 계산
-        df['H-L'] = df['High'] - df['Low']
-        df['H-PC'] = abs(df['High'] - df['Close'].shift(1))
-        df['L-PC'] = abs(df['Low'] - df['Close'].shift(1))
-        df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
-        df['ATR'] = df['TR'].rolling(window=period).mean()
+        # SMA 계산
+        df['SMA'] = df['Close'].rolling(window=period).mean()
 
-        # Basic Bands
-        df['HL_avg'] = (df['High'] + df['Low']) / 2
-        df['upper_band'] = df['HL_avg'] + (multiplier * df['ATR'])
-        df['lower_band'] = df['HL_avg'] - (multiplier * df['ATR'])
-
-        # Supertrend
-        df['supertrend'] = 0.0
-        df['trend'] = 1
-
-        for i in range(period, len(df)):
-            if df['Close'].iloc[i] <= df['upper_band'].iloc[i-1]:
-                df.loc[df.index[i], 'supertrend'] = df['upper_band'].iloc[i]
-                df.loc[df.index[i], 'trend'] = -1
-            else:
-                df.loc[df.index[i], 'supertrend'] = df['lower_band'].iloc[i]
-                df.loc[df.index[i], 'trend'] = 1
-
-        return df
-
-    def strategy_supertrend(self, df, period=10, multiplier=3):
-        """
-        Supertrend 전략
-        - Trend가 1이면 매수
-        - Trend가 -1이면 매도
-        """
-        df = self.calculate_supertrend(df, period, multiplier)
-
-        # 신호 생성
+        # 신호 생성 (전일 종가 > 전일 SMA)
+        df['prev_close'] = df['Close'].shift(1)
+        df['prev_sma'] = df['SMA'].shift(1)
         df['signal'] = 0
-        df.loc[df['trend'] == 1, 'signal'] = 1
+        df.loc[df['prev_close'] > df['prev_sma'], 'signal'] = 1
 
         # 포지션 변화
         df['position_change'] = df['signal'].diff()
@@ -567,7 +542,7 @@ class TrendFollowingStrategies:
             '6. Donchian Channel': lambda df: self.strategy_donchian_channel(df, 20, 10),
             '7. MA Slope': lambda df: self.strategy_ma_slope(df, 30, 0),
             '8. Parabolic SAR': lambda df: self.strategy_parabolic_sar(df),
-            '9. Supertrend': lambda df: self.strategy_supertrend(df, 10, 3),
+            '9. SMA30 Above': lambda df: self.strategy_sma30_above(df, 30),
             '10. Triple EMA': lambda df: self.strategy_triple_ema(df, 8, 21, 55)
         }
 
@@ -829,7 +804,7 @@ class TrendFollowingStrategies:
             print(f"   CAGR: {row['CAGR (%)']:.2f}% | Sharpe: {row['Sharpe Ratio']:.2f} | MDD: {row['MDD (%)']:.2f}%")
         print()
 
-    def run_analysis(self):
+    def run_analysis(self, chart_filename='trend_following_10_strategies.png'):
         """전체 분석 실행"""
         # 1. 데이터 로드
         self.load_data()
@@ -847,7 +822,7 @@ class TrendFollowingStrategies:
         self.print_metrics_table(metrics_df)
 
         # 6. 시각화
-        self.plot_comparison(metrics_df)
+        self.plot_comparison(metrics_df, save_path=chart_filename)
 
         return metrics_df
 
@@ -869,7 +844,7 @@ def main():
         end_date=None,
         slippage=0.002
     )
-    btc_metrics = btc_backtest.run_analysis()
+    btc_metrics = btc_backtest.run_analysis(chart_filename='trend_following_btc.png')
     btc_metrics.to_csv('trend_following_btc_metrics.csv', index=False)
     print("BTC metrics saved to trend_following_btc_metrics.csv")
 
@@ -884,7 +859,7 @@ def main():
         end_date=None,
         slippage=0.002
     )
-    btc_eth_metrics = btc_eth_backtest.run_analysis()
+    btc_eth_metrics = btc_eth_backtest.run_analysis(chart_filename='trend_following_btc_eth.png')
 
     # 결과 저장
     btc_eth_metrics.to_csv('trend_following_btc_eth_metrics.csv', index=False)
@@ -902,9 +877,9 @@ def main():
     print("="*80)
     print("\n생성된 파일:")
     print("  - trend_following_btc_metrics.csv (BTC 단일)")
-    print("  - trend_following_10_strategies.png (BTC 단일 차트)")
+    print("  - trend_following_btc.png (BTC 단일 차트)")
     print("  - trend_following_btc_eth_metrics.csv (BTC+ETH)")
-    print("  - trend_following_10_strategies.png (BTC+ETH 차트 - 덮어쓰기)")
+    print("  - trend_following_btc_eth.png (BTC+ETH 차트)")
     print("="*80 + "\n")
 
 
