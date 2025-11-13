@@ -553,8 +553,8 @@ def main():
     # Short range: includes 1 (previous close) to 50
     SHORT_RANGE = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
 
-    # Long range: from 20 to 200
-    LONG_RANGE = [20, 30, 40, 50, 60, 75, 100, 125, 150, 175, 200]
+    # Long range: from 5 to 200 (extended to include shorter periods)
+    LONG_RANGE = [5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 175, 200]
 
     # Optimization metric
     METRIC = 'sharpe_ratio'  # Options: 'sharpe_ratio', 'cagr', 'total_return'
