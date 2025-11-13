@@ -1,10 +1,15 @@
 """
 암호화폐 포트폴리오 전략 비교 분석 (수정 버전)
 
-세 가지 전략을 BTC, ETH, ADA, XRP에 적용하여 동일 비중 포트폴리오 성과 비교:
+여덟 가지 전략을 BTC, ETH, ADA, XRP에 적용하여 동일 비중 포트폴리오 성과 비교:
 1. Turtle Trading (터틀트레이딩) - ✅ 현실적인 체결 가격으로 수정
 2. RSI 55 전략
-3. SMA 30 전략
+3. SMA 30 전략 (Reference)
+4. Dual EMA Trend
+5. Triple SMA Momentum
+6. MACD Trend Filter
+7. Keltner Breakout
+8. Volatility Adjusted Momentum
 
 각 전략은 4개 종목에 25%씩 동일 비중 투자
 """
@@ -42,6 +47,32 @@ class CryptoPortfolioComparisonFixed:
         self.data = {}
         self.strategy_results = {}
         self.portfolio_results = {}
+
+    # ==================== 보조 지표 & 공통 로직 ====================
+    @staticmethod
+    def calculate_atr(df, period=14):
+        """Average True Range 계산"""
+        high_low = df['High'] - df['Low']
+        high_close = (df['High'] - df['Close'].shift(1)).abs()
+        low_close = (df['Low'] - df['Close'].shift(1)).abs()
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = true_range.rolling(window=period).mean()
+        return atr
+
+    def apply_position_returns(self, df, signal_col='signal'):
+        """시그널(0/1)을 이용한 수익률 계산 공통 함수"""
+        df = df.copy()
+        df['position'] = df[signal_col].fillna(0)
+        df['position_change'] = df['position'].diff().fillna(0)
+        df['daily_price_return'] = df['Close'].pct_change().fillna(0)
+        df['returns'] = df['position'].shift(1).fillna(0) * df['daily_price_return']
+
+        trade_mask = df['position_change'] != 0
+        df.loc[trade_mask, 'returns'] += -self.slippage
+
+        df['returns'] = df['returns'].fillna(0)
+        df['cumulative'] = (1 + df['returns']).cumprod()
+        return df
 
     def load_data(self):
         """모든 종목 데이터 로드"""
@@ -196,13 +227,98 @@ class CryptoPortfolioComparisonFixed:
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
+    # ==================== 전략 4~8: 고급 추세 추종 전략 ====================
+    def strategy_dual_ema_trend(self, df, fast_period=20, slow_period=100,
+                                atr_period=14, atr_threshold=0.015):
+        """듀얼 EMA + 변동성 필터 추세 전략"""
+        df = df.copy()
+        df['ema_fast'] = df['Close'].ewm(span=fast_period, adjust=False).mean()
+        df['ema_slow'] = df['Close'].ewm(span=slow_period, adjust=False).mean()
+        df['atr_pct'] = (self.calculate_atr(df, atr_period) / df['Close']).fillna(0)
+
+        df['signal'] = np.where(
+            (df['ema_fast'] > df['ema_slow']) &
+            (df['Close'] > df['ema_slow']) &
+            (df['atr_pct'] > atr_threshold), 1, 0
+        )
+
+        return self.apply_position_returns(df)
+
+    def strategy_triple_sma_momentum(self, df, short=20, mid=60, long=120,
+                                     momentum_window=40):
+        """삼중 SMA 스택 + 모멘텀 확인 전략"""
+        df = df.copy()
+        df['sma_short'] = df['Close'].rolling(window=short).mean()
+        df['sma_mid'] = df['Close'].rolling(window=mid).mean()
+        df['sma_long'] = df['Close'].rolling(window=long).mean()
+        df['momentum'] = df['Close'].pct_change(momentum_window)
+
+        df['signal'] = np.where(
+            (df['sma_short'] > df['sma_mid']) &
+            (df['sma_mid'] > df['sma_long']) &
+            (df['momentum'] > 0) &
+            (df['Close'] > df['sma_short']), 1, 0
+        )
+
+        return self.apply_position_returns(df)
+
+    def strategy_macd_trend(self, df, fast=12, slow=26, signal=9, trend_filter=150):
+        """MACD 추세 전략 (장기 EMA 필터 포함)"""
+        df = df.copy()
+        ema_fast = df['Close'].ewm(span=fast, adjust=False).mean()
+        ema_slow = df['Close'].ewm(span=slow, adjust=False).mean()
+        macd = ema_fast - ema_slow
+        macd_signal = macd.ewm(span=signal, adjust=False).mean()
+        macd_hist = macd - macd_signal
+        long_term_ema = df['Close'].ewm(span=trend_filter, adjust=False).mean()
+
+        df['signal'] = np.where(
+            (macd_hist > 0) &
+            (macd > 0) &
+            (df['Close'] > long_term_ema), 1, 0
+        )
+
+        return self.apply_position_returns(df)
+
+    def strategy_keltner_breakout(self, df, ema_period=20, atr_period=20, multiplier=2):
+        """켈트너 채널 상단 돌파 추세 전략"""
+        df = df.copy()
+        ema_mid = df['Close'].ewm(span=ema_period, adjust=False).mean()
+        atr = self.calculate_atr(df, atr_period)
+        upper_band = ema_mid + multiplier * atr
+        exit_band = ema_mid
+
+        df['signal'] = 0
+        df.loc[df['Close'] > upper_band, 'signal'] = 1
+        df.loc[df['Close'] < exit_band, 'signal'] = 0
+        df['signal'] = df['signal'].ffill().fillna(0)
+
+        return self.apply_position_returns(df)
+
+    def strategy_volatility_adjusted_momentum(self, df, momentum_window=30,
+                                              atr_period=14, threshold=1.5):
+        """ATR 대비 모멘텀 비율로 추세를 따르는 전략"""
+        df = df.copy()
+        df['momentum'] = df['Close'].pct_change(momentum_window)
+        df['atr_pct'] = (self.calculate_atr(df, atr_period) / df['Close']).replace(0, np.nan)
+        df['vol_adjusted'] = df['momentum'] / df['atr_pct']
+
+        df['signal'] = np.where(df['vol_adjusted'] > threshold, 1, 0)
+
+        return self.apply_position_returns(df)
+
     # ==================== 전략 실행 ====================
     def run_all_strategies(self):
         """모든 전략을 모든 종목에 대해 실행"""
         strategies = {
             'Turtle Trading (Fixed)': lambda df: self.strategy_turtle_trading(df, entry_period=20, exit_period=10),
             'RSI 55': lambda df: self.strategy_rsi_55(df, rsi_period=14, rsi_threshold=55),
-            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30)
+            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30),
+            'Dual EMA Trend': lambda df: self.strategy_dual_ema_trend(df),
+            'Triple SMA Momentum': lambda df: self.strategy_triple_sma_momentum(df),
+            'MACD Trend Filter': lambda df: self.strategy_macd_trend(df),
+            'Keltner Breakout': lambda df: self.strategy_keltner_breakout(df),
+            'Volatility Adjusted Momentum': lambda df: self.strategy_volatility_adjusted_momentum(df)
         }
 
         print("\n" + "="*80)
