@@ -31,6 +31,7 @@ class StrategyLoopFinder:
         self.slippage = slippage
         self.data = {}
         self.all_results = []
+        self.portfolio_returns_dict = {}  # 전략별 포트폴리오 수익률 시계열 저장
 
     def load_data(self):
         """모든 종목 데이터 로드"""
@@ -392,6 +393,7 @@ class StrategyLoopFinder:
                 strategy_results[symbol] = result
 
             portfolio_returns = self.create_portfolio(strategy_results)
+            self.portfolio_returns_dict[strategy_name] = portfolio_returns  # 저장
             metrics = self.calculate_metrics(portfolio_returns)
             metrics['Strategy'] = strategy_name
             metrics['Type'] = 'SMA'
