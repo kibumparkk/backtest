@@ -1,383 +1,485 @@
-# 비트코인 추세추종 전략 Top 5 발굴 - 최종 보고서
+# 비트코인 추세추종 전략 연구 - 최종 보고서
+
+## 🚨 Critical Discovery: Lookahead Bias in Multi-Timeframe Strategies
 
 ## 📋 Executive Summary
 
 **목표**: Close > SMA30 벤치마크(Sharpe 1.6591)를 능가하는 추세추종 전략 5개 발굴
 
-**결과**: ✅ **성공 - 멀티 타임프레임(MTF) 전략으로 7개 발견, Top 5 선정**
+**결과**: ❌ **실패 - 엄격한 교차 검증 결과, 멀티 타임프레임(MTF) 전략은 벤치마크를 능가하지 못함**
 
-**핵심 성과**: 최고 전략 **Sharpe 2.3170 (+39.65%)** 달성
-
----
-
-## 🏆 Top 5 Multi-Timeframe Strategies
-
-### 벤치마크
-- **전략**: Close > SMA30 (일봉 단순이동평균선 30일)
-- **Sharpe Ratio**: 1.6591
-- **Total Return**: 8,859%
-- **CAGR**: 65.44%
-- **MDD**: -29.07%
-- **기간**: 2018-01-01 ~ 2025-11-05 (7.8년)
-- **슬리피지**: 0.2% (매매 시 양방향)
+**핵심 발견**: **Lookahead bias를 완전히 제거하면, 단순한 단일 타임프레임 전략이 최고 성과**
 
 ---
 
-### 🥇 #1: Weekly Donchian + Daily SMA30
+## 🔍 연구 과정 및 발견
+
+### 1단계: 초기 벡터화 구현 (❌ Lookahead Bias)
+
+**시도**: 멀티 타임프레임(주봉 + 일봉) 전략을 pandas 벡터화로 구현
+
+```python
+# ❌ 잘못된 코드
+weekly_signal = weekly['signal'].reindex(daily.index, method='ffill')
+```
+
+**문제점**:
+- 주봉 2018-04-23은 일요일 종가로 계산되지만, 월요일부터 적용됨
+- 월요일~일요일의 미래 정보를 월요일에 사용
+
+**결과**: Weekly Donchian Sharpe 2.32, Return 5,149% (의심스러울 정도로 높음)
+
+---
+
+### 2단계: Loop-based 구현 + `available_from` 체크 (❌ 여전히 Subtle Bias)
+
+**시도**: 주봉 신호에 "사용 가능 시점" 추가하여 loop로 검증
+
+```python
+# ✅ 시간 흐름 제어는 좋음
+for date in daily_dates:
+    if date >= weekly_signals[week]['available_from']:
+        use_signal = weekly_signals[week]['signal']
+
+# ❌ 하지만 신호 자체는 전체 데이터로 계산됨
+weekly = daily_data.resample('W-MON', ...).agg(...)  # 전체 데이터 사용!
+weekly['SMA10'] = weekly['Close'].rolling(10).mean()  # 미래 정보 포함!
+```
+
+**문제점**:
+- 주봉 신호를 전체 데이터셋으로 미리 계산
+- 2020-01-15에 사용한 weekly SMA10은 2025년 데이터까지 포함하여 계산됨
+- `available_from` 체크는 했지만, 지표 자체가 오염됨
+
+**결과**: Weekly Donchian Sharpe 2.32 (여전히 과대평가)
+
+---
+
+### 3단계: Fully Loop-based 구현 - 매일 주봉 재계산 (✅ 완전히 Correct)
+
+**시도**: 매일 루프에서 "오늘까지의 데이터로만" 주봉을 새로 계산
+
+```python
+# ✅ 올바른 구현
+for i in range(len(daily)):
+    date = daily.index[i]
+
+    # ⭐ 핵심: 오늘까지의 데이터만 사용
+    data_until_today = daily.iloc[:i+1]
+
+    # 주봉 재계산 (오늘까지만)
+    weekly = data_until_today.resample('W-MON', ...).agg(...)
+
+    # 완료된 주만 사용 (현재 미완성 주 제외)
+    current_week_start = date - pd.Timedelta(days=date.dayofweek)
+    completed_weeks = weekly[weekly.index < current_week_start]
+
+    # 지표 계산 (완료된 주만 사용)
+    weekly_sma = completed_weeks['Close'].rolling(10).mean()
+    signal = completed_weeks.iloc[-1]['Close'] > weekly_sma.iloc[-1]
+```
+
+**결과**:
+- **Benchmark는 여전히 Sharpe 1.6591** (검증 통과!)
+- **모든 MTF 전략이 크게 하락**:
+  - Weekly Donchian: Sharpe 2.32 → **0.99** (-57%, 벤치마크보다 나쁨!)
+  - Weekly EMA20: Sharpe 2.08 → **1.65** (-21%, 벤치마크와 동일)
+  - Weekly SMA10: Sharpe 2.04 → **1.59** (-22%, 벤치마크보다 나쁨)
+  - Weekly SMA20: Sharpe 1.91 → **1.57** (-18%, 벤치마크보다 나쁨)
+  - Weekly SMA50: Sharpe 1.80 → **1.63** (-9%, 벤치마크보다 나쁨)
+
+---
+
+## 📊 교차 검증 결과 비교
+
+### Sharpe Ratio 비교
+
+| 전략 | Previous Loop-based<br>(Still Biased) | Fully Loop-based<br>(Correct) | 차이 | vs Benchmark |
+|------|--------------------------------------|------------------------------|------|--------------|
+| **Benchmark** | **1.6591** | **1.6591** | **0%** | **-** |
+| Weekly Donchian | 2.3170 | **0.9891** | **-57%** | ❌ -40% |
+| Weekly EMA20 | 2.0780 | **1.6515** | **-21%** | ≈ Tie |
+| Weekly SMA10 | 2.0425 | **1.5918** | **-22%** | ❌ -4% |
+| Weekly SMA20 | 1.9095 | **1.5673** | **-18%** | ❌ -6% |
+| Weekly SMA50 | 1.7954 | **1.6305** | **-9%** | ❌ -2% |
+
+### Total Return 비교
+
+| 전략 | Previous<br>(Biased) | Fully Loop-based<br>(Correct) | 과대평가 |
+|------|---------------------|------------------------------|----------|
+| Benchmark | 8,859% | 8,859% | 0% |
+| Weekly Donchian | 5,149% | **417%** | **-92%** |
+| Weekly EMA20 | 15,961% | **4,927%** | **-69%** |
+| Weekly SMA10 | 18,500% | **4,719%** | **-74%** |
+| Weekly SMA20 | 10,487% | **3,966%** | **-62%** |
+| Weekly SMA50 | 7,437% | **4,507%** | **-39%** |
+
+**Weekly Donchian은 92%나 과대평가되었습니다!**
+
+---
+
+## 🎯 최종 결론 및 권장 전략
+
+### ✅ 최종 권장 전략: **Close > SMA30 (벤치마크)**
 
 **전략 로직**:
 ```python
-# Weekly filter
-weekly_high_20 = weekly['High'].rolling(20).max()
-weekly_signal = (weekly['Close'] > weekly_high_20 * 0.95)
-
-# Daily timing
-daily_signal = (daily['Close'] > daily['SMA30'])
-
-# Combined (Weekly signal available from next day after week ends)
-final_signal = weekly_signal AND daily_signal
+signal = 1 if close > SMA(30) else 0
 ```
 
 **성과**:
-- **Sharpe Ratio**: **2.3170** (+39.65% vs benchmark) 🏆
-- **Total Return**: 5,149%
-- **CAGR**: 65.69%
-- **MDD**: **-16.10%** (벤치마크 -29.07% 대비 **45% 감소**) 🔥
-- **Total Trades**: 76 (7.8년간 매우 선택적 진입)
-
-**전략 설명**:
-- **주봉 필터**: 20주 최고가의 95% 이상 (강력한 상승 추세만 선택)
-- **일봉 타이밍**: SMA30 위에서 진입
-- **핵심 강점**:
-  - 약세장에서 조기 이탈 (2018, 2022년 손실 최소화)
-  - MDD -16.10%로 **매우 안전한 리스크 프로필**
-  - 거래 횟수 76회로 비용 최소화
+- **Sharpe Ratio**: **1.6591**
+- **Total Return**: **8,859%** (88.59배)
+- **CAGR**: **77.37%**
+- **MDD**: **-38.09%**
+- **기간**: 2018-01-01 ~ 2025-10-31 (7.8년)
+- **슬리피지**: 0.2% (매매 시 양방향)
+- **총 거래**: 1,593회
 
 **왜 이 전략이 최고인가**:
-- Donchian 채널은 브레이크아웃 시스템의 정석
-- 주봉 20주 신고가 = 강력한 모멘텀 확인
-- 95% 기준으로 과도한 진입 방지
-- 일봉 SMA30으로 단기 노이즈 필터링
+1. **단순함**: 가장 간단한 추세추종 전략
+2. **검증됨**: 세 가지 구현 방식 모두 동일한 결과
+3. **투명함**: Lookahead bias 발생 불가능
+4. **효과적**: 복잡한 MTF 전략과 동등하거나 더 나은 성과
+
+**"Simplicity is the ultimate sophistication."** - Leonardo da Vinci
 
 ---
 
-### 🥈 #2: Weekly EMA20 + Daily SMA30
+## 📖 Lookahead Bias 상세 분석
 
-**전략 로직**:
-```python
-weekly_signal = (weekly['Close'] > weekly['EMA20'])
-daily_signal = (daily['Close'] > daily['SMA30'])
-final_signal = weekly_signal AND daily_signal
-```
+### 무엇이 잘못되었나?
 
-**성과**:
-- **Sharpe Ratio**: **2.0780** (+25.25% vs benchmark)
-- **Total Return**: 15,961%
-- **CAGR**: 91.08% (가장 높음)
-- **MDD**: -31.87%
-- **Total Trades**: 106
-
-**전략 설명**:
-- EMA는 SMA보다 최근 가격에 민감
-- 주봉 EMA20으로 중기 추세 확인
-- 총 수익률 15,961%로 **Top 5 중 가장 높음**
-
----
-
-### 🥉 #3: Weekly SMA10 + Daily SMA30
-
-**전략 로직**:
-```python
-weekly_signal = (weekly['Close'] > weekly['SMA10'])
-daily_signal = (daily['Close'] > daily['SMA30'])
-final_signal = weekly_signal AND daily_signal
-```
-
-**성과**:
-- **Sharpe Ratio**: **2.0425** (+23.11% vs benchmark)
-- **Total Return**: 18,500%
-- **CAGR**: 94.69% (가장 높음)
-- **MDD**: -27.18%
-- **Total Trades**: 112
-
-**전략 설명**:
-- 주봉 SMA10으로 빠른 추세 전환 포착
-- CAGR 94.69%로 **연평균 수익률 최고**
-- 총 수익률 18,500% = 초기 투자금 186배
-
----
-
-### 4위: Weekly SMA20 + Daily SMA30
-
-**성과**:
-- **Sharpe Ratio**: 1.9095 (+15.10% vs benchmark)
-- **Total Return**: 10,487%
-- **CAGR**: 81.19%
-- **MDD**: -31.87%
-- **Total Trades**: 108
-
-**전략 설명**:
-- 주봉 SMA20으로 중기 추세 확인
-- 균형잡힌 진입/퇴출 빈도
-
----
-
-### 5위: Weekly SMA50 + Daily SMA30
-
-**성과**:
-- **Sharpe Ratio**: 1.7954 (+8.22% vs benchmark)
-- **Total Return**: 7,437%
-- **CAGR**: 73.51%
-- **MDD**: -36.18%
-- **Total Trades**: 118
-
-**전략 설명**:
-- 주봉 SMA50으로 장기 추세 확인
-- 가장 보수적인 접근
-- 여전히 벤치마크보다 8.22% 우수
-
----
-
-## 📊 Top 5 종합 비교
-
-| Rank | Strategy | Sharpe | Improve | Total Return | CAGR | MDD | Trades |
-|------|----------|--------|---------|--------------|------|-----|--------|
-| - | **Benchmark** | **1.6591** | - | **8,859%** | **65.44%** | **-29.07%** | **1,527** |
-| 🥇 | **Weekly Donchian + Daily SMA30** | **2.3170** | **+39.7%** | **5,149%** | **65.69%** | **-16.10%** | **76** |
-| 🥈 | Weekly EMA20 + Daily SMA30 | 2.0780 | +25.3% | 15,961% | 91.08% | -31.87% | 106 |
-| 🥉 | Weekly SMA10 + Daily SMA30 | 2.0425 | +23.1% | 18,500% | 94.69% | -27.18% | 112 |
-| 4 | Weekly SMA20 + Daily SMA30 | 1.9095 | +15.1% | 10,487% | 81.19% | -31.87% | 108 |
-| 5 | Weekly SMA50 + Daily SMA30 | 1.7954 | +8.2% | 7,437% | 73.51% | -36.18% | 118 |
-
-### 시각화
-
-![Strategy Comparison](mtf_strategies_comparison.png)
-
-*그림 1: Top 5 전략 성과 비교 (Sharpe, CAGR, MDD, Risk-Return Profile)*
-
-![Detailed Metrics](mtf_strategies_table.png)
-
-*그림 2: 상세 성과 지표 테이블*
-
-![Equity Curve and Drawdown](mtf_equity_drawdown.png)
-
-*그림 3: 누적 자산 곡선 (Log Scale) 및 Drawdown 분석 - Weekly Donchian 전략의 MDD -16.10%가 벤치마크 -38.09% 대비 58% 낮은 것을 확인*
-
----
-
-## 💡 핵심 발견 (Key Insights)
-
-### 1. **멀티 타임프레임의 위력**
-- 단일 타임프레임 최고: SMA31 (Sharpe 1.70, +2.3%)
-- 멀티 타임프레임 최고: **Weekly Donchian (Sharpe 2.32, +39.7%)**
-- **17배 더 나은 성과 개선**
-
-### 2. **주봉 필터의 효과**
-주봉 추세 확인으로:
-- 약세장 조기 회피 (2018, 2022)
-- 강세장 완전 참여 (2020-2021, 2023-2024)
-- MDD 대폭 감소 (29.07% → 16.10%)
-
-### 3. **Donchian 채널의 우수성**
-- SMA/EMA보다 **더 명확한 브레이크아웃 신호**
-- 20주 최고가 = 시장의 강력한 합의
-- 95% 기준 = 과도한 고점 매수 방지
-
-### 4. **거래 빈도와 성과**
-- 벤치마크: 1,527회
-- #1 전략: 76회 (**95% 감소**)
-- 적은 거래 = 낮은 비용 + 높은 성과
-- "Less is More" 실증
-
-### 5. **리스크 조정 수익률의 중요성**
-- #1 전략: 총 수익 5,149% (5위)
-- 하지만 **Sharpe 2.32로 1위**
-- MDD -16.10%로 **가장 안전**
-- 안정적 수익 > 변동성 큰 고수익
-
----
-
-## 📈 투자 시뮬레이션
-
-### 100만원 투자 시 (7.8년)
-
-| Strategy | Final Amount | vs Benchmark |
-|----------|-------------|--------------|
-| Benchmark | 89.6M | - |
-| #1 Donchian | 62.5M | -27.1M |
-| #2 EMA20 | 160.6M | +71.0M |
-| #3 SMA10 | 186.0M | +96.4M |
-
-**주목**: #1 전략이 총 금액은 적지만 **MDD -16.10%로 가장 안전**
-
-### 2018년 약세장 성과
-
-| Year | Benchmark | #1 Donchian | Difference |
-|------|-----------|-------------|------------|
-| 2018 | -22.74% | -8.63% | **+14.11%p** |
-
-**핵심**: 약세장에서 손실을 절반 이하로 줄임
-
----
-
-## 🎯 전략 선택 가이드
-
-### 안전성 최우선 (리스크 회피형)
-**추천**: **#1 Weekly Donchian + Daily SMA30**
-- Sharpe 2.32 (최고)
-- MDD -16.10% (최저)
-- 76회 거래 (관리 용이)
-- 연 65.69% 수익
-
-### 최대 수익 추구 (공격형)
-**추천**: **#3 Weekly SMA10 + Daily SMA30**
-- CAGR 94.69% (최고)
-- 총 수익 18,500% (최고)
-- MDD -27.18% (감수 가능)
-
-### 균형잡힌 선택
-**추천**: **#2 Weekly EMA20 + Daily SMA30**
-- Sharpe 2.08
-- CAGR 91.08%
-- 총 수익 15,961%
-
----
-
-## ⚠️ 실전 적용 시 주의사항
-
-### 1. 백테스트 한계
-- 과거 성과 ≠ 미래 성과
-- 생존 편향 (비트코인이 살아남은 시나리오)
-- 최적화 편향 (특정 기간에 과적합 가능성)
-
-### 2. 실전 비용
-- 거래소 수수료: 0.05~0.25% 추가
-- 슬리피지: 시장 상황에 따라 0.2% 이상 가능
-- 세금: 한국 기준 22% 또는 27.5% (250만원 공제)
-
-### 3. 신호 지연
-- 백테스트: 종가 확정 후 다음 날 진입
-- 실전: 종가 예측 또는 익일 시가 진입
-- 차이로 인한 성과 저하 가능
-
-### 4. 심리적 요인
-- MDD 구간(최대 -16% ~ -36%)에서 전략 이탈 위험
-- 기계적 실행 필수
-- 감정 배제
-
-### 5. 시장 환경 변화
-- 규제 변화 (ETF 승인, 규제 강화 등)
-- 시장 성숙도 증가로 효율성 향상
-- 전략 효과 감소 가능성
-- 정기적 재평가 필요
-
----
-
-## 💻 실행 방법
-
-### 코드 실행
-
-```bash
-# 전략 실행 및 백테스트
-python bitcoin_mtf_loop_based.py
-
-# 성과 비교 시각화 생성
-python create_mtf_visualization.py
-
-# Equity Curve & Drawdown 시각화 생성
-python create_equity_curve_visualization.py
-```
-
-### 전략 구현 예시
+#### Previous Loop-based (여전히 버그 있음)
 
 ```python
-import pandas as pd
+# Step 1: 전체 데이터로 주봉 계산
+weekly = daily_data.resample('W-MON', ...).agg(...)  # ❌ 2018~2025 전체 사용
+weekly['SMA10'] = weekly['Close'].rolling(10).mean()  # ❌ 미래 정보 포함
 
-# 데이터 로드
-df_daily = pd.read_parquet('chart_day/BTC_KRW.parquet')
-df_weekly = df_daily.resample('W-MON', label='left', closed='left').agg({
-    'High': 'max',
-    'Close': 'last'
-}).dropna()
+# Step 2: 신호 저장
+for week_date in weekly.index:
+    signal = weekly.loc[week_date, 'signal']  # ❌ 미래 데이터로 계산된 신호
+    available_from = week_date + pd.Timedelta(days=1)
+    weekly_signals[week_date] = {'signal': signal, 'available_from': available_from}
 
-# Weekly Donchian 신호
-df_weekly['high_20'] = df_weekly['High'].rolling(20).max()
-df_weekly['weekly_signal'] = (df_weekly['Close'] > df_weekly['high_20'] * 0.95).astype(int)
-
-# Daily SMA30 신호
-df_daily['SMA30'] = df_daily['Close'].rolling(30).mean()
-df_daily['daily_signal'] = (df_daily['Close'] > df_daily['SMA30']).astype(int)
-
-# Loop-based combination
-for each day:
-    # 1. Get daily signal for today
-    # 2. Find most recent completed weekly signal
-    # 3. Combine: final_signal = weekly_signal AND daily_signal
-    # 4. Trade based on final_signal
+# Step 3: 일별 루프에서 사용
+for date in daily_dates:
+    if date >= weekly_signals[week]['available_from']:  # ✅ 시간 체크는 OK
+        use_signal = weekly_signals[week]['signal']     # ❌ 하지만 신호 자체는 오염됨
 ```
 
-### 일일 체크리스트
+**문제**:
+- 2020-01-15에 사용한 weekly SMA10 값이 2020-01-13 주봉으로 계산되었지만
+- 그 SMA10은 **2025년까지의 주봉 데이터를 포함**하여 계산됨
+- 시간 흐름은 제어했지만, 지표 계산에 미래 정보 사용
 
-1. **주말 (일요일 밤)**:
-   - 주봉 종가 확인
-   - Donchian 20주 최고가 계산
-   - 종가 > 최고가 * 0.95? → 주봉 신호 생성
+#### Fully Loop-based (올바름)
 
-2. **매일 (종가 후)**:
-   - 일봉 종가 확인
-   - SMA30 계산
-   - 종가 > SMA30? → 일봉 신호 생성
+```python
+# 매일 반복문에서:
+for i in range(len(daily)):
+    date = daily.index[i]
 
-3. **신호 결합**:
-   - 주봉 신호 AND 일봉 신호 = 1 → 매수/보유
-   - 하나라도 0 → 매도/대기
+    # ✅ 오늘까지의 데이터만
+    data_until_today = daily.iloc[:i+1]
+
+    # ✅ 주봉 재계산 (오늘까지만)
+    weekly = data_until_today.resample('W-MON', ...).agg(...)
+
+    # ✅ 완료된 주만 (미완성 주 제외)
+    current_week_start = date - pd.Timedelta(days=date.dayofweek)
+    completed_weeks = weekly[weekly.index < current_week_start]
+
+    # ✅ 지표 계산 (완료된 주만)
+    sma10 = completed_weeks['Close'].rolling(10).mean()
+    signal = completed_weeks.iloc[-1]['Close'] > sma10.iloc[-1]
+```
+
+**왜 올바른가**:
+- 2020-01-15에는 2020-01-15까지의 일봉 데이터만 사용
+- 그 데이터로 주봉 생성 (약 2년치 = 104주)
+- 완료된 주만 사용 (현재 미완성 주 제외)
+- SMA10 계산에 **절대 미래 정보 불가능**
 
 ---
 
-## 📁 파일 구조
+## 🔬 핵심 교훈
 
+### 1. Lookahead Bias는 매우 미묘함
+
+**세 번의 시도:**
+1. ❌ 벡터화: 명백한 lookahead bias
+2. ❌ Loop + `available_from`: 미묘한 lookahead bias (지표 계산)
+3. ✅ Fully loop-based: 완전히 정확
+
+**교훈**: "Loop로 했으니까 안전하다"는 착각 금지
+
+### 2. 단순함의 힘
+
+- 복잡한 MTF 전략: 구현 오류 가능성 높음, lookahead bias 위험
+- 단순한 단일 타임프레임: 오류 불가능, 투명함
+
+**결론**: 가장 단순한 전략이 가장 좋은 전략
+
+### 3. 교차 검증의 중요성
+
+**검증 체계**:
+1. Vectorized implementation
+2. Loop-based verification
+3. Fully loop-based cross-validation
+
+**각 단계마다 새로운 bias 발견!**
+
+### 4. "Too good to be true"는 진짜 의심해야
+
+- Weekly Donchian Sharpe 2.32: 의심스러울 정도로 좋음
+- 교차 검증: Sharpe 0.99 (실제로는 벤치마크보다 나쁨)
+- **-92% 수익률 과대평가**
+
+---
+
+## 📁 프로젝트 구조
+
+### 핵심 파일
+
+#### 1. 전략 구현
+- `bitcoin_mtf_loop_based.py` - Previous loop-based (아직 subtle bias 있음)
+- `bitcoin_mtf_fully_loopbased.py` - ✅ Fully loop-based (완전히 정확)
+
+#### 2. 결과 파일
+- `bitcoin_mtf_loopbased_results.csv` - Previous 결과 (과대평가됨)
+- `bitcoin_mtf_fully_loopbased_results.csv` - ✅ 정확한 결과
+
+#### 3. 문서 및 설명
+- `CRITICAL_FINDING_LOOKAHEAD_BIAS.md` - 상세 분석 문서
+- `LOOKAHEAD_BIAS_EXPLANATION.md` - Loop-based 메커니즘 설명
+
+#### 4. 시각화
+- `lookahead_bias_comparison.png` - Previous vs Fully loop-based 비교
+- `lookahead_bias_explanation.png` - Lookahead bias 발생 메커니즘 다이어그램
+- `mtf_equity_drawdown.png` - Equity curve 및 drawdown 시각화
+
+---
+
+## 💻 정확한 백테스팅 구현 가이드
+
+### MTF 전략 올바른 구현 방법
+
+```python
+def backtest_mtf_correct(daily_data, weekly_period=10):
+    """
+    완전히 정확한 MTF 백테스트
+    매일 주봉을 재계산하여 lookahead bias 완전 차단
+    """
+    capital = 1.0
+    position = 0
+    equity_curve = []
+
+    for i in range(len(daily_data)):
+        date = daily_data.index[i]
+
+        # ⭐ Step 1: 오늘까지의 데이터만
+        data_until_today = daily_data.iloc[:i+1]
+
+        # ⭐ Step 2: 주봉 재계산
+        weekly = data_until_today.resample('W-MON', label='left', closed='left').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }).dropna()
+
+        # ⭐ Step 3: 완료된 주만 사용
+        current_week_start = date - pd.Timedelta(days=date.dayofweek)
+        completed_weeks = weekly[weekly.index < current_week_start]
+
+        if len(completed_weeks) < weekly_period:
+            equity_curve.append(capital)
+            continue
+
+        # ⭐ Step 4: 지표 계산 (완료된 주만)
+        weekly_sma = completed_weeks['Close'].rolling(weekly_period).mean()
+        latest_week = completed_weeks.iloc[-1]
+        weekly_signal = 1 if latest_week['Close'] > weekly_sma.iloc[-1] else 0
+
+        # ⭐ Step 5: 일봉 신호
+        daily_sma = data_until_today['Close'].rolling(30).mean()
+        daily_signal = 1 if data_until_today['Close'].iloc[-1] > daily_sma.iloc[-1] else 0
+
+        # ⭐ Step 6: 결합
+        final_signal = 1 if (weekly_signal == 1 and daily_signal == 1) else 0
+
+        # ⭐ Step 7: 자본 업데이트
+        if i > 0:
+            prev_close = data_until_today['Close'].iloc[-2]
+            curr_close = data_until_today['Close'].iloc[-1]
+            daily_return = (curr_close - prev_close) / prev_close
+
+            if position == 1:
+                capital = capital * (1 + daily_return)
+
+            if position != final_signal:
+                capital = capital * (1 - slippage)
+
+        position = final_signal
+        equity_curve.append(capital)
+
+    return equity_curve
 ```
-backtest/
-├── README.md                              # 본 보고서
-├── bitcoin_mtf_loop_based.py             # MTF 전략 구현 (Loop-based)
-├── bitcoin_mtf_loopbased_results.csv     # 전략 성과 데이터
-├── create_mtf_visualization.py           # 성과 비교 시각화 생성 코드
-├── create_equity_curve_visualization.py  # Equity Curve & Drawdown 시각화 생성
-├── mtf_strategies_comparison.png         # 성과 비교 차트
-├── mtf_strategies_table.png              # 상세 지표 테이블
-├── mtf_equity_drawdown.png               # Equity Curve & Drawdown 차트
-└── chart_day/                             # 비트코인 일봉 데이터
-    └── BTC_KRW.parquet
+
+**핵심 원칙**:
+1. `data_until_today = daily_data.iloc[:i+1]` - 과거만 사용
+2. 매일 주봉 재계산 - 미래 정보 불가능
+3. 완료된 주만 사용 - 현재 미완성 주 제외
+4. 동적 지표 계산 - 고정된 사전 계산 금지
+
+---
+
+## 🎓 실전 트레이딩 가이드
+
+### 권장 전략: Close > SMA30
+
+#### 구현 코드
+
+```python
+def simple_sma30_strategy(data, slippage=0.002):
+    """
+    가장 단순하고 효과적인 전략
+    Lookahead bias 발생 불가능
+    """
+    df = data.copy()
+    df['SMA30'] = df['Close'].rolling(30).mean()
+    df['signal'] = (df['Close'] > df['SMA30']).astype(int)
+
+    # 포지션 변경 감지
+    df['position_change'] = df['signal'].diff()
+
+    # 일일 수익률
+    df['daily_return'] = df['Close'].pct_change()
+
+    # 전략 수익률 (전일 포지션 * 오늘 수익률)
+    df['strategy_return'] = df['signal'].shift(1) * df['daily_return']
+
+    # 슬리피지 적용
+    slip_cost = pd.Series(0.0, index=df.index)
+    slip_cost[df['position_change'] == 1] = -slippage   # Buy
+    slip_cost[df['position_change'] == -1] = -slippage  # Sell
+
+    df['strategy_return'] = df['strategy_return'] + slip_cost
+    df['strategy_return'] = df['strategy_return'].fillna(0)
+
+    # 누적 수익
+    df['cumulative'] = (1 + df['strategy_return']).cumprod()
+
+    return df
+```
+
+#### 실전 적용
+
+```python
+# 매일 실행
+def daily_trading_decision(current_price, historical_prices):
+    """
+    실제 거래 결정
+    """
+    # 최근 30일 평균
+    sma30 = historical_prices[-30:].mean()
+
+    # 신호 생성
+    if current_price > sma30:
+        return "BUY" if not in_position else "HOLD"
+    else:
+        return "SELL" if in_position else "WAIT"
 ```
 
 ---
 
-## 🎓 결론
+## 📈 성과 시각화
 
-### ✅ 목표 달성
+### 1. 비교 차트
+![Lookahead Bias Comparison](lookahead_bias_comparison.png)
 
-**100% 성공**: 벤치마크(Sharpe 1.6591)를 능가하는 전략 **7개 발견**, Top 5 선정 완료
+**해석**:
+- 왼쪽: Sharpe ratio 비교 - Benchmark는 동일, MTF는 큰 폭 하락
+- 오른쪽: Total return 비교 (log scale) - 과대평가 정도 시각화
 
-### 🏆 최우수 전략
+### 2. Lookahead Bias 메커니즘
+![Lookahead Bias Explanation](lookahead_bias_explanation.png)
 
-**Weekly Donchian + Daily SMA30**
-- Sharpe 2.3170 (벤치마크 대비 **+39.65%**)
-- MDD -16.10% (벤치마크 -29.07% 대비 **45% 감소**)
-- 76회 거래 (관리 용이)
-- **리스크 조정 수익률 최고**
+**해석**:
+- 상단: 시간 흐름 다이어그램 - Lookahead 발생 시점
+- 하단: Loop-based 플로우차트 - 올바른 구현 방법
 
-### 💡 핵심 교훈
+### 3. Equity Curve & Drawdown
+![MTF Equity Drawdown](mtf_equity_drawdown.png)
 
-1. **멀티 타임프레임의 위력**: 단일 대비 17배 더 나은 성과
-2. **주봉 필터 효과**: 약세장 조기 회피로 MDD 대폭 감소
-3. **Donchian 우수성**: 명확한 브레이크아웃 신호
-4. **거래 빈도**: 적은 거래가 더 나은 성과 (76 vs 1,527회)
-5. **Loop-based 검증**: 벡터화 구현의 lookahead bias 방지
+**해석**:
+- 상단: 누적 자산 (log scale)
+- 하단: Drawdown 시계열 - 리스크 프로필
 
 ---
 
-**작성일**: 2025-11-14
-**분석 기간**: 2018-01-01 ~ 2025-11-05 (7.8년)
-**데이터**: Upbit BTC/KRW 일봉
-**슬리피지**: 0.2%
-**Git Branch**: `claude/bitcoin-trend-strategy-benchmark-015LzBQYd1BxPjBA7caaBZ8y`
+## 🔑 핵심 요약
+
+### 연구 결과
+
+1. ❌ **MTF 전략은 벤치마크를 능가하지 못함**
+2. ✅ **단순한 Close > SMA30이 최고 전략**
+3. 🚨 **Lookahead bias는 매우 미묘하고 위험함**
+4. 🔬 **교차 검증은 필수**
+
+### 투자자를 위한 조언
+
+1. **단순한 전략을 선호하라**
+   - 복잡함 = 오류 가능성 증가
+   - 투명함 = 신뢰성 증가
+
+2. **의심스러울 정도로 좋은 결과는 의심하라**
+   - Sharpe 2.32 → 교차 검증 → 0.99
+   - -92% 과대평가 발견
+
+3. **교차 검증은 필수**
+   - 다른 방법으로 재구현
+   - 결과 비교
+   - Benchmark 일치 확인
+
+4. **Lookahead bias 체크리스트**
+   - ✅ 시간 순서 흐름 준수?
+   - ✅ 미래 데이터 사용 없음?
+   - ✅ 지표 계산 시 과거만 사용?
+   - ✅ 완료된 바만 사용?
+
+---
+
+## 📚 참고 자료
+
+### 생성된 문서
+- `CRITICAL_FINDING_LOOKAHEAD_BIAS.md` - 상세 분석
+- `LOOKAHEAD_BIAS_EXPLANATION.md` - 메커니즘 설명
+
+### 코드 파일
+- `bitcoin_mtf_fully_loopbased.py` - 정확한 구현
+- `create_comparison_chart.py` - 비교 시각화
+- `create_lookahead_diagram.py` - 설명 다이어그램
+
+### 데이터
+- `chart_day/BTC_KRW.parquet` - 비트코인 일봉 데이터
+
+---
+
+## 🎯 최종 답변
+
+**Original Question**: 비트코인 추세추종 전략 Top 5를 찾아라 (벤치마크 Sharpe 1.66 초과)
+
+**Final Answer**:
+- **엄격한 교차 검증 결과, 벤치마크를 능가하는 전략은 없습니다**
+- **권장 전략**: Close > SMA30 (Sharpe 1.6591, CAGR 77.37%, Return 8,859%)
+- **핵심 교훈**: 단순함이 최고, Lookahead bias 경계, 교차 검증 필수
+
+---
+
+**"The best investment you can make is in yourself. The more you learn, the more you earn."** - Warren Buffett
+
+이 연구를 통해 백테스팅의 함정(lookahead bias)을 배우고, 올바른 검증 방법을 습득했습니다. 이것이 진정한 투자입니다.
