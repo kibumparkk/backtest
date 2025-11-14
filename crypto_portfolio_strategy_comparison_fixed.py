@@ -196,13 +196,125 @@ class CryptoPortfolioComparisonFixed:
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
+    # ==================== Helper Functions ====================
+    def calculate_wma(self, prices, period):
+        """
+        Weighted Moving Average (WMA) 계산
+        - 최근 가격에 더 높은 가중치 부여
+        """
+        weights = np.arange(1, period + 1)
+        wma = prices.rolling(window=period).apply(
+            lambda x: np.dot(x, weights) / weights.sum(), raw=True
+        )
+        return wma
+
+    # ==================== 전략 4: Custom Condition Strategy ====================
+    def strategy_custom_conditions(self, df, C1=10, C2=10, C3=0.5, C4=0.5):
+        """
+        사용자 정의 조건식 전략
+
+        매수 조건:
+        - V1 = 2*close(0) - close(1)
+        - V2 = WMA(V1, C1)
+        - 월이 8월, 9월이 아님
+        - close(1) >= V2
+        - open(0) + (high(1) - low(1)) * C3 <= high(0)
+
+        매수가: open(0) + (high(1) - low(1)) * C3
+
+        매도 조건:
+        - V1 = 2*close(0) - close(1)
+        - V2 = WMA(V1, C2)
+        - close(1) <= V2
+        - open(0) - (high(1) - low(1)) * C4 >= low(0)
+
+        매도가: open(0) - (high(1) - low(1)) * C4
+
+        Args:
+            C1: 매수용 WMA 기간
+            C2: 매도용 WMA 기간
+            C3: 매수가 계산용 승수
+            C4: 매도가 계산용 승수
+        """
+        df = df.copy()
+
+        # V1 계산: 2*close(0) - close(1)
+        df['V1'] = 2 * df['Close'] - df['Close'].shift(1)
+
+        # V2 계산 (매수용): WMA of V1
+        df['V2_buy'] = self.calculate_wma(df['V1'], C1)
+
+        # V2 계산 (매도용): WMA of V1
+        df['V2_sell'] = self.calculate_wma(df['V1'], C2)
+
+        # 이전 봉 데이터
+        df['prev_close'] = df['Close'].shift(1)
+        df['prev_high'] = df['High'].shift(1)
+        df['prev_low'] = df['Low'].shift(1)
+        df['prev_range'] = df['prev_high'] - df['prev_low']
+
+        # 월 정보
+        df['month'] = df.index.month
+
+        # 매수 조건
+        buy_condition = (
+            (df['month'] != 8) &  # 8월 제외
+            (df['month'] != 9) &  # 9월 제외
+            (df['prev_close'] >= df['V2_buy']) &  # close(1) >= V2
+            (df['Open'] + df['prev_range'] * C3 <= df['High'])  # open(0) + (high(1)-low(1))*C3 <= high(0)
+        )
+
+        # 매도 조건
+        sell_condition = (
+            (df['prev_close'] <= df['V2_sell']) &  # close(1) <= V2
+            (df['Open'] - df['prev_range'] * C4 >= df['Low'])  # open(0) - (high(1)-low(1))*C4 >= low(0)
+        )
+
+        # 매수가/매도가 계산
+        df['buy_price_formula'] = df['Open'] + df['prev_range'] * C3
+        df['sell_price_formula'] = df['Open'] - df['prev_range'] * C4
+
+        # 포지션 관리 및 수익률 계산
+        df['position'] = 0
+        df['returns'] = 0.0
+        df['entry_price'] = np.nan
+
+        for i in range(1, len(df)):
+            # 이전 포지션 상태 유지
+            df.iloc[i, df.columns.get_loc('position')] = df.iloc[i-1, df.columns.get_loc('position')]
+
+            # 포지션이 없을 때 매수 조건 확인
+            if df.iloc[i-1]['position'] == 0 and buy_condition.iloc[i]:
+                df.iloc[i, df.columns.get_loc('position')] = 1
+                # 매수가: 공식에 슬리피지 추가
+                buy_price = df.iloc[i]['buy_price_formula'] * (1 + self.slippage)
+                df.iloc[i, df.columns.get_loc('entry_price')] = buy_price
+
+            # 포지션이 있을 때 매도 조건 확인
+            elif df.iloc[i-1]['position'] == 1:
+                if sell_condition.iloc[i]:
+                    df.iloc[i, df.columns.get_loc('position')] = 0
+                    # 매도가: 공식에 슬리피지 추가
+                    sell_price = df.iloc[i]['sell_price_formula'] * (1 - self.slippage)
+                    entry_price = df.iloc[i-1]['entry_price']
+                    if pd.notna(entry_price) and entry_price > 0:
+                        df.iloc[i, df.columns.get_loc('returns')] = (sell_price / entry_price - 1)
+                else:
+                    # 포지션 유지
+                    df.iloc[i, df.columns.get_loc('entry_price')] = df.iloc[i-1]['entry_price']
+
+        # 누적 수익률
+        df['cumulative'] = (1 + df['returns']).cumprod()
+        return df
+
     # ==================== 전략 실행 ====================
     def run_all_strategies(self):
         """모든 전략을 모든 종목에 대해 실행"""
         strategies = {
             'Turtle Trading (Fixed)': lambda df: self.strategy_turtle_trading(df, entry_period=20, exit_period=10),
             'RSI 55': lambda df: self.strategy_rsi_55(df, rsi_period=14, rsi_threshold=55),
-            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30)
+            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30),
+            'Custom Conditions': lambda df: self.strategy_custom_conditions(df, C1=10, C2=10, C3=0.5, C4=0.5)
         }
 
         print("\n" + "="*80)
