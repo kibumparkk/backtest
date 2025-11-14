@@ -303,8 +303,8 @@ class SMACrossoverOptimizer:
         )
 
         # 시각화
-        fig = plt.figure(figsize=(20, 12))
-        gs = fig.add_gridspec(3, 3, hspace=0.35, wspace=0.3)
+        fig = plt.figure(figsize=(20, 16))
+        gs = fig.add_gridspec(4, 3, hspace=0.35, wspace=0.3)
 
         # 1. 히트맵: Sharpe Ratio
         ax1 = fig.add_subplot(gs[0, 0])
@@ -380,6 +380,49 @@ class SMACrossoverOptimizer:
                     xytext=(10, 10), textcoords='offset points',
                     fontsize=11, fontweight='bold',
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.7))
+
+        # 6. 월별 수익률 히트맵
+        ax6 = fig.add_subplot(gs[3, :2])
+        monthly_returns = result_df['returns'].resample('M').apply(lambda x: (1 + x).prod() - 1) * 100
+
+        # 월별 수익률을 연도x월 형태로 피벗
+        monthly_returns_df = monthly_returns.to_frame('returns')
+        monthly_returns_df['year'] = monthly_returns_df.index.year
+        monthly_returns_df['month'] = monthly_returns_df.index.month
+        heatmap_data = monthly_returns_df.pivot(index='year', columns='month', values='returns')
+
+        # 히트맵 그리기
+        sns.heatmap(heatmap_data, annot=True, fmt='.1f', cmap='RdYlGn', center=0,
+                   cbar_kws={'label': 'Return (%)'}, ax=ax6, linewidths=0.5,
+                   vmin=-30, vmax=30)
+        ax6.set_title('Monthly Returns Heatmap (%)', fontsize=13, fontweight='bold')
+        ax6.set_xlabel('Month', fontsize=11)
+        ax6.set_ylabel('Year', fontsize=11)
+
+        # 7. 월별 수익률 분포 (박스플롯 + 바 차트)
+        ax7 = fig.add_subplot(gs[3, 2])
+
+        # 각 월별 평균 수익률 계산
+        monthly_avg = monthly_returns_df.groupby('month')['returns'].mean()
+        months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+        colors = ['green' if x > 0 else 'red' for x in monthly_avg.values]
+        bars = ax7.bar(range(1, 13), monthly_avg.values, color=colors, alpha=0.7, edgecolor='black')
+        ax7.set_xticks(range(1, 13))
+        ax7.set_xticklabels(months, rotation=45, ha='right', fontsize=9)
+        ax7.set_title('Average Monthly Returns by Month', fontsize=12, fontweight='bold')
+        ax7.set_ylabel('Average Return (%)', fontsize=10)
+        ax7.axhline(y=0, color='black', linestyle='-', linewidth=0.8)
+        ax7.grid(True, alpha=0.3, axis='y')
+
+        # 값 표시
+        for i, (bar, val) in enumerate(zip(bars, monthly_avg.values)):
+            height = bar.get_height()
+            ax7.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{val:.1f}',
+                    ha='center', va='bottom' if height > 0 else 'top',
+                    fontsize=8, fontweight='bold')
 
         # 전체 제목
         fig.suptitle(f'{symbol_clean} - SMA Crossover Optimization Results\n'
