@@ -159,6 +159,10 @@ final_signal = weekly_signal AND daily_signal
 
 *그림 2: 상세 성과 지표 테이블*
 
+![Equity Curve and Drawdown](mtf_equity_drawdown.png)
+
+*그림 3: 누적 자산 곡선 (Log Scale) 및 Drawdown 분석 - Weekly Donchian 전략의 MDD -16.10%가 벤치마크 -38.09% 대비 58% 낮은 것을 확인*
+
 ---
 
 ## 💡 핵심 발견 (Key Insights)
@@ -274,11 +278,14 @@ final_signal = weekly_signal AND daily_signal
 ### 코드 실행
 
 ```bash
-# 전략 실행
+# 전략 실행 및 백테스트
 python bitcoin_mtf_loop_based.py
 
-# 시각화 생성
+# 성과 비교 시각화 생성
 python create_mtf_visualization.py
+
+# Equity Curve & Drawdown 시각화 생성
+python create_equity_curve_visualization.py
 ```
 
 ### 전략 구현 예시
@@ -331,13 +338,15 @@ for each day:
 
 ```
 backtest/
-├── README.md                          # 본 보고서
-├── bitcoin_mtf_loop_based.py         # MTF 전략 구현 (Loop-based)
-├── bitcoin_mtf_loopbased_results.csv # 전략 성과 데이터
-├── create_mtf_visualization.py       # 시각화 생성 코드
-├── mtf_strategies_comparison.png     # 성과 비교 차트
-├── mtf_strategies_table.png          # 상세 지표 테이블
-└── chart_day/                         # 비트코인 일봉 데이터
+├── README.md                              # 본 보고서
+├── bitcoin_mtf_loop_based.py             # MTF 전략 구현 (Loop-based)
+├── bitcoin_mtf_loopbased_results.csv     # 전략 성과 데이터
+├── create_mtf_visualization.py           # 성과 비교 시각화 생성 코드
+├── create_equity_curve_visualization.py  # Equity Curve & Drawdown 시각화 생성
+├── mtf_strategies_comparison.png         # 성과 비교 차트
+├── mtf_strategies_table.png              # 상세 지표 테이블
+├── mtf_equity_drawdown.png               # Equity Curve & Drawdown 차트
+└── chart_day/                             # 비트코인 일봉 데이터
     └── BTC_KRW.parquet
 ```
 
