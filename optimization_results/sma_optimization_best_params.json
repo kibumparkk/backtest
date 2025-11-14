@@ -1,0 +1,54 @@
+{
+  "BTC_KRW": {
+    "short_window": 2,
+    "long_window": 35,
+    "metrics": {
+      "total_return": 9864.737078456783,
+      "cagr": 79.79525963045265,
+      "mdd": -35.704063896816145,
+      "sharpe": 1.6930582753044803,
+      "win_rate": 51.790281329923275,
+      "total_trades": 1564,
+      "profit_factor": 1.4455242813853049
+    }
+  },
+  "ETH_KRW": {
+    "short_window": 2,
+    "long_window": 20,
+    "metrics": {
+      "total_return": 12904.678662020831,
+      "cagr": 103.3543413166345,
+      "mdd": -49.695335224887955,
+      "sharpe": 1.5972708363681658,
+      "win_rate": 50.077399380804955,
+      "total_trades": 1292,
+      "profit_factor": 1.4213830516077866
+    }
+  },
+  "ADA_KRW": {
+    "short_window": 1,
+    "long_window": 20,
+    "metrics": {
+      "total_return": 24426.42568934721,
+      "cagr": 123.06360065377939,
+      "mdd": -61.02195620084525,
+      "sharpe": 1.5124783707671259,
+      "win_rate": 46.2457337883959,
+      "total_trades": 1172,
+      "profit_factor": 1.4176293357314484
+    }
+  },
+  "XRP_KRW": {
+    "short_window": 2,
+    "long_window": 10,
+    "metrics": {
+      "total_return": 2184.8259910379525,
+      "cagr": 57.809149049205864,
+      "mdd": -55.429852239615954,
+      "sharpe": 0.9633635270182735,
+      "win_rate": 41.900826446280995,
+      "total_trades": 1210,
+      "profit_factor": 1.3106912796799093
+    }
+  }
+}
