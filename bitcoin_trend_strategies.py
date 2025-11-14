@@ -125,23 +125,20 @@ class BitcoinTrendStrategyFinder:
             'Total Trades': int(total_trades)
         }
 
-    # ==================== 벤치마크 전략: 전일종가 > SMA30 ====================
+    # ==================== 벤치마크 전략: Close > SMA30 ====================
     def benchmark_close_above_sma30(self):
         """
-        벤치마크: 전일종가 > SMA30
-        - 전일 종가가 SMA30 이상일 때 매수
-        - 전일 종가가 SMA30 미만일 때 매도
+        벤치마크: Close > SMA30
+        - 당일 종가가 SMA30 이상일 때 매수 (다음날 진입)
+        - 당일 종가가 SMA30 미만일 때 매도
         """
         df = self.data.copy()
 
         # SMA30 계산
         df['SMA30'] = df['Close'].rolling(window=30).mean()
 
-        # 전일 종가 사용
-        df['prev_close'] = df['Close'].shift(1)
-
-        # 신호: 전일종가 > SMA30
-        signal = (df['prev_close'] > df['SMA30']).astype(int)
+        # 신호: 종가 > SMA30 (표준적인 구현)
+        signal = (df['Close'] > df['SMA30']).astype(int)
 
         return signal
 
@@ -371,6 +368,200 @@ class BitcoinTrendStrategyFinder:
         signal = (df['Close'] > df['SMA200']).astype(int)
         return signal
 
+    # ==================== 전략 21: ADX 필터 추가 ====================
+    def strategy_close_sma30_with_adx(self):
+        """Close > SMA30 + ADX > 25 (강한 추세만 진입)"""
+        df = self.data.copy()
+        df['SMA30'] = df['Close'].rolling(window=30).mean()
+
+        # ADX 계산 (간단 버전)
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift(1))
+        low_close = np.abs(df['Low'] - df['Close'].shift(1))
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = tr.rolling(window=14).mean()
+
+        # +DM, -DM
+        high_diff = df['High'].diff()
+        low_diff = -df['Low'].diff()
+        plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0)
+        minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0)
+
+        plus_di = 100 * pd.Series(plus_dm).rolling(window=14).mean() / atr
+        minus_di = 100 * pd.Series(minus_dm).rolling(window=14).mean() / atr
+
+        dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.rolling(window=14).mean()
+
+        signal = ((df['Close'] > df['SMA30']) & (adx > 25)).astype(int)
+        return signal
+
+    # ==================== 전략 22: Close > SMA25 ====================
+    def strategy_close_above_sma25(self):
+        """종가가 SMA25 위에 있을 때 매수"""
+        df = self.data.copy()
+        df['SMA25'] = df['Close'].rolling(window=25).mean()
+        signal = (df['Close'] > df['SMA25']).astype(int)
+        return signal
+
+    # ==================== 전략 23: Close > SMA35 ====================
+    def strategy_close_above_sma35(self):
+        """종가가 SMA35 위에 있을 때 매수"""
+        df = self.data.copy()
+        df['SMA35'] = df['Close'].rolling(window=35).mean()
+        signal = (df['Close'] > df['SMA35']).astype(int)
+        return signal
+
+    # ==================== 전략 24: Close > SMA40 ====================
+    def strategy_close_above_sma40(self):
+        """종가가 SMA40 위에 있을 때 매수"""
+        df = self.data.copy()
+        df['SMA40'] = df['Close'].rolling(window=40).mean()
+        signal = (df['Close'] > df['SMA40']).astype(int)
+        return signal
+
+    # ==================== 전략 25: Close > EMA25 ====================
+    def strategy_close_above_ema25(self):
+        """종가가 EMA25 위에 있을 때 매수"""
+        df = self.data.copy()
+        df['EMA25'] = df['Close'].ewm(span=25, adjust=False).mean()
+        signal = (df['Close'] > df['EMA25']).astype(int)
+        return signal
+
+    # ==================== 전략 26: Close > EMA35 ====================
+    def strategy_close_above_ema35(self):
+        """종가가 EMA35 위에 있을 때 매수"""
+        df = self.data.copy()
+        df['EMA35'] = df['Close'].ewm(span=35, adjust=False).mean()
+        signal = (df['Close'] > df['EMA35']).astype(int)
+        return signal
+
+    # ==================== 전략 27: Close > EMA40 ====================
+    def strategy_close_above_ema40(self):
+        """종가가 EMA40 위에 있을 때 매수"""
+        df = self.data.copy()
+        df['EMA40'] = df['Close'].ewm(span=40, adjust=False).mean()
+        signal = (df['Close'] > df['EMA40']).astype(int)
+        return signal
+
+    # ==================== 전략 28: Close > WMA30 (가중이평) ====================
+    def strategy_close_above_wma30(self):
+        """종가가 WMA30 위에 있을 때 매수"""
+        df = self.data.copy()
+        weights = np.arange(1, 31)
+        df['WMA30'] = df['Close'].rolling(window=30).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+        signal = (df['Close'] > df['WMA30']).astype(int)
+        return signal
+
+    # ==================== 전략 29: SMA30 기울기 필터 ====================
+    def strategy_close_sma30_with_slope(self):
+        """Close > SMA30 + SMA30 상승 중"""
+        df = self.data.copy()
+        df['SMA30'] = df['Close'].rolling(window=30).mean()
+        df['SMA30_slope'] = df['SMA30'].diff(5)
+        signal = ((df['Close'] > df['SMA30']) & (df['SMA30_slope'] > 0)).astype(int)
+        return signal
+
+    # ==================== 전략 30: Keltner Channel ====================
+    def strategy_keltner_channel(self):
+        """Keltner Channel 상단 돌파 시 매수"""
+        df = self.data.copy()
+        df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+
+        # ATR 계산
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift(1))
+        low_close = np.abs(df['Low'] - df['Close'].shift(1))
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = tr.rolling(window=20).mean()
+
+        df['upper'] = df['EMA20'] + 2 * atr
+        df['lower'] = df['EMA20'] - 2 * atr
+
+        signal = pd.Series(0, index=df.index)
+        position = 0
+
+        for i in range(1, len(df)):
+            if df.iloc[i]['Close'] > df.iloc[i]['upper'] and position == 0:
+                position = 1
+            elif df.iloc[i]['Close'] < df.iloc[i]['lower'] and position == 1:
+                position = 0
+            signal.iloc[i] = position
+
+        return signal
+
+    # ==================== 전략 31: 볼륨 필터 추가 ====================
+    def strategy_close_sma30_with_volume(self):
+        """Close > SMA30 + 거래량 > 평균 거래량"""
+        df = self.data.copy()
+        df['SMA30'] = df['Close'].rolling(window=30).mean()
+        df['Volume_MA'] = df['Volume'].rolling(window=30).mean()
+        signal = ((df['Close'] > df['SMA30']) & (df['Volume'] > df['Volume_MA'])).astype(int)
+        return signal
+
+    # ==================== 전략 32: Close > SMA30 + RSI 50-70 ====================
+    def strategy_close_sma30_rsi_filter(self):
+        """Close > SMA30 + RSI 50-70 (과열 방지)"""
+        df = self.data.copy()
+        df['SMA30'] = df['Close'].rolling(window=30).mean()
+
+        # RSI 계산
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+
+        signal = ((df['Close'] > df['SMA30']) & (rsi >= 50) & (rsi <= 70)).astype(int)
+        return signal
+
+    # ==================== 전략 33: Donchian (25/15) ====================
+    def strategy_donchian_25_15(self):
+        """25일 최고가 돌파 시 매수, 15일 최저가 하향 돌파 시 매도"""
+        df = self.data.copy()
+        df['high_25'] = df['High'].rolling(window=25).max().shift(1)
+        df['low_15'] = df['Low'].rolling(window=15).min().shift(1)
+
+        signal = pd.Series(0, index=df.index)
+        position = 0
+
+        for i in range(1, len(df)):
+            if df.iloc[i]['High'] > df.iloc[i]['high_25'] and position == 0:
+                position = 1
+            elif df.iloc[i]['Low'] < df.iloc[i]['low_15'] and position == 1:
+                position = 0
+            signal.iloc[i] = position
+
+        return signal
+
+    # ==================== 전략 34: Donchian (35/20) ====================
+    def strategy_donchian_35_20(self):
+        """35일 최고가 돌파 시 매수, 20일 최저가 하향 돌파 시 매도"""
+        df = self.data.copy()
+        df['high_35'] = df['High'].rolling(window=35).max().shift(1)
+        df['low_20'] = df['Low'].rolling(window=20).min().shift(1)
+
+        signal = pd.Series(0, index=df.index)
+        position = 0
+
+        for i in range(1, len(df)):
+            if df.iloc[i]['High'] > df.iloc[i]['high_35'] and position == 0:
+                position = 1
+            elif df.iloc[i]['Low'] < df.iloc[i]['low_20'] and position == 1:
+                position = 0
+            signal.iloc[i] = position
+
+        return signal
+
+    # ==================== 전략 35: SMA30/SMA60 크로스 ====================
+    def strategy_sma30_sma60_cross(self):
+        """SMA30이 SMA60 위에 있을 때 매수"""
+        df = self.data.copy()
+        df['SMA30'] = df['Close'].rolling(window=30).mean()
+        df['SMA60'] = df['Close'].rolling(window=60).mean()
+        signal = (df['SMA30'] > df['SMA60']).astype(int)
+        return signal
+
     def run_all_strategies(self):
         """모든 전략 실행 및 성과 평가"""
         print("\n" + "="*80)
@@ -400,6 +591,21 @@ class BitcoinTrendStrategyFinder:
             '18_Donchian_50_25': self.strategy_donchian_50_25,
             '19_SMA15/SMA40_Cross': self.strategy_sma15_sma40_cross,
             '20_Close>SMA200': self.strategy_close_above_sma200,
+            '21_Close>SMA30+ADX': self.strategy_close_sma30_with_adx,
+            '22_Close>SMA25': self.strategy_close_above_sma25,
+            '23_Close>SMA35': self.strategy_close_above_sma35,
+            '24_Close>SMA40': self.strategy_close_above_sma40,
+            '25_Close>EMA25': self.strategy_close_above_ema25,
+            '26_Close>EMA35': self.strategy_close_above_ema35,
+            '27_Close>EMA40': self.strategy_close_above_ema40,
+            '28_Close>WMA30': self.strategy_close_above_wma30,
+            '29_Close>SMA30+Slope': self.strategy_close_sma30_with_slope,
+            '30_Keltner_Channel': self.strategy_keltner_channel,
+            '31_Close>SMA30+Volume': self.strategy_close_sma30_with_volume,
+            '32_Close>SMA30+RSI': self.strategy_close_sma30_rsi_filter,
+            '33_Donchian_25_15': self.strategy_donchian_25_15,
+            '34_Donchian_35_20': self.strategy_donchian_35_20,
+            '35_SMA30/SMA60_Cross': self.strategy_sma30_sma60_cross,
         }
 
         metrics_list = []
