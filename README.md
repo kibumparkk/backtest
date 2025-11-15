@@ -134,6 +134,83 @@ slippage_cost[df['position'].diff() == -1] = -0.002  # 매도
 df['returns'] = df['returns'] + slippage_cost
 ```
 
+### 📊 필수 시각화 요구사항
+
+백테스트 결과는 다음 차트를 반드시 포함해야 합니다:
+
+1. **누적 자산 곡선 (Cumulative Returns)**
+   - 초기 자본: **1원**에서 시작
+   - Y축 스케일: **로그 스케일 (log-y)** 사용
+   - 복리 수익률 반영
+   - 이유: 로그 스케일은 수익률의 비율 변화를 선형으로 표현하여 장기 성과 비교에 적합
+
+2. **Drawdown 차트**
+   - 단위: **퍼센트 (%)** 표시
+   - 최고점 대비 하락폭 계산
+   - MDD (Maximum Drawdown) 명시
+
+```python
+# 누적 자산 계산 (1원 시작)
+df['cumulative_returns'] = (1 + df['returns']).cumprod()
+
+# Drawdown 계산 (%)
+df['cumulative_max'] = df['cumulative_returns'].cummax()
+df['drawdown'] = (df['cumulative_returns'] - df['cumulative_max']) / df['cumulative_max'] * 100
+
+# 시각화
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+
+# 누적 자산 (log-y)
+axes[0].plot(df.index, df['cumulative_returns'])
+axes[0].set_yscale('log')
+axes[0].set_title('Cumulative Returns (Starting from 1 KRW)')
+axes[0].set_ylabel('Cumulative Returns (log scale)')
+axes[0].grid(True)
+
+# Drawdown (%)
+axes[1].fill_between(df.index, df['drawdown'], 0, alpha=0.3, color='red')
+axes[1].set_title('Drawdown (%)')
+axes[1].set_ylabel('Drawdown (%)')
+axes[1].grid(True)
+
+plt.tight_layout()
+plt.savefig('backtest_results.png')
+```
+
+### 📈 성과 지표 계산
+
+모든 백테스트는 다음 지표를 계산하고 보고해야 합니다:
+
+```python
+import numpy as np
+
+# CAGR (Compound Annual Growth Rate)
+total_days = (df.index[-1] - df.index[0]).days
+years = total_days / 365.25
+total_return = df['cumulative_returns'].iloc[-1] - 1
+cagr = (1 + total_return) ** (1 / years) - 1
+
+# Sharpe Ratio (연율화)
+returns_mean = df['returns'].mean() * 252  # 일간 → 연간
+returns_std = df['returns'].std() * np.sqrt(252)
+sharpe_ratio = returns_mean / returns_std if returns_std > 0 else 0
+
+# Maximum Drawdown
+mdd = df['drawdown'].min()
+
+# Win Rate
+winning_trades = (df['returns'] > 0).sum()
+total_trades = (df['returns'] != 0).sum()
+win_rate = winning_trades / total_trades if total_trades > 0 else 0
+
+print(f"CAGR: {cagr*100:.2f}%")
+print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+print(f"MDD: {mdd:.2f}%")
+print(f"Win Rate: {win_rate*100:.2f}%")
+```
+
 ---
 
 ## ⚠️ 중요: Perfect Execution Bias 수정 완료
@@ -170,15 +247,15 @@ if df['High'] > entry_high:
 3. **슬리피지는 필수**
 4. **체결 가격은 현실적으로**
 
-### 🚨 레드 플래그 (즉시 재검토!)
+### ⚠️ 주의사항
 
-백테스트 결과가 다음 중 하나라도 해당하면 **99% 버그**:
+백테스트 결과가 다음과 같이 비현실적으로 좋다면 코드를 재검토하세요:
 - 샤프 비율 > 3.0
 - 승률 > 70%
 - MDD < 10%
 - 연속 손실 0회
 
-→ **즉시 체크리스트 참조하여 재검토**
+→ **Look-ahead bias, 슬리피지 누락 등을 체크리스트로 확인**
 
 ---
 
