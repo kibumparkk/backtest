@@ -196,7 +196,67 @@ class CryptoPortfolioComparisonFixed:
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
-    # ==================== 전략 4: SMA 30 with Cooldown ====================
+    # ==================== 전략 4: SMA 30 + RSI 55 Combined ====================
+    def strategy_sma_30_rsi_55_combined(self, df, sma_period=30, rsi_period=14, rsi_threshold=55):
+        """
+        SMA 30 + RSI 55 조합 전략
+        - 매수 조건: Close >= SMA(30) AND RSI >= 55 (두 조건 모두 충족)
+        - 매도 조건: Close < SMA(30) (SMA만 체크)
+        - 더 엄격한 매수 조건으로 거래 빈도 감소 예상
+
+        Args:
+            sma_period: SMA 기간 (default: 30)
+            rsi_period: RSI 기간 (default: 14)
+            rsi_threshold: RSI 임계값 (default: 55)
+        """
+        df = df.copy()
+
+        # SMA 계산
+        df['SMA'] = df['Close'].rolling(window=sma_period).mean()
+
+        # RSI 계산
+        df['RSI'] = self.calculate_rsi(df['Close'], rsi_period)
+
+        # 매수/매도 신호 생성
+        # 매수: SMA 30 이상 AND RSI 55 이상
+        # 매도: SMA 30 미만
+        df['buy_signal'] = (df['Close'] >= df['SMA']) & (df['RSI'] >= rsi_threshold)
+        df['sell_signal'] = df['Close'] < df['SMA']
+
+        # 포지션 계산
+        df['position'] = 0
+        for i in range(1, len(df)):
+            prev_position = df.iloc[i-1]['position']
+
+            # 매수 신호
+            if df.iloc[i]['buy_signal'] and prev_position == 0:
+                df.iloc[i, df.columns.get_loc('position')] = 1
+            # 매도 신호
+            elif df.iloc[i]['sell_signal'] and prev_position == 1:
+                df.iloc[i, df.columns.get_loc('position')] = 0
+            # 포지션 유지
+            else:
+                df.iloc[i, df.columns.get_loc('position')] = prev_position
+
+        # 포지션 변화 감지
+        df['position_change'] = df['position'].diff()
+
+        # 일일 수익률 계산
+        df['daily_price_return'] = df['Close'].pct_change()
+        df['returns'] = df['position'].shift(1) * df['daily_price_return']
+
+        # 매수/매도 시 슬리피지 적용
+        slippage_cost = pd.Series(0.0, index=df.index)
+        slippage_cost[df['position_change'] == 1] = -self.slippage
+        slippage_cost[df['position_change'] == -1] = -self.slippage
+
+        df['returns'] = df['returns'] + slippage_cost
+
+        # 누적 수익률
+        df['cumulative'] = (1 + df['returns']).cumprod()
+        return df
+
+    # ==================== 전략 5: SMA 30 with Cooldown ====================
     def strategy_sma_30_with_cooldown(self, df, sma_period=30, cooldown_days=3):
         """
         SMA 30 교차 전략 + 매도 후 재매수 금지 기간
@@ -276,6 +336,7 @@ class CryptoPortfolioComparisonFixed:
             'Turtle Trading (Fixed)': lambda df: self.strategy_turtle_trading(df, entry_period=20, exit_period=10),
             'RSI 55': lambda df: self.strategy_rsi_55(df, rsi_period=14, rsi_threshold=55),
             'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30),
+            'SMA 30 + RSI 55': lambda df: self.strategy_sma_30_rsi_55_combined(df, sma_period=30, rsi_period=14, rsi_threshold=55),
             'SMA 30 + 3D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=3),
             'SMA 30 + 4D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=4),
             'SMA 30 + 5D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=5),
