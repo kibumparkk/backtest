@@ -164,19 +164,44 @@ class CryptoPortfolioComparisonFixed:
         return df
 
     # ==================== 전략 3: SMA 30 ====================
-    def strategy_sma_30(self, df, sma_period=30):
+    def strategy_sma_30(self, df, sma_period=30, rebuying_restriction_days=7):
         """
-        SMA 30 교차 전략
+        SMA 30 교차 전략 (매도 후 재매수 제한 추가)
         - 가격이 SMA 30 이상일 때 매수 (보유)
         - 가격이 SMA 30 미만일 때 매도 후 현금 보유
+        - 매도 후 N일간 재매수 금지 (default: 7일)
         """
         df = df.copy()
 
         # SMA 계산
         df['SMA'] = df['Close'].rolling(window=sma_period).mean()
 
-        # 포지션 계산
-        df['position'] = np.where(df['Close'] >= df['SMA'], 1, 0)
+        # 포지션 계산 (매도 후 재매수 제한 적용)
+        df['position'] = 0
+        df['last_sell_date'] = pd.NaT
+
+        for i in range(1, len(df)):
+            # 이전 포지션 유지
+            df.iloc[i, df.columns.get_loc('position')] = df.iloc[i-1, df.columns.get_loc('position')]
+            df.iloc[i, df.columns.get_loc('last_sell_date')] = df.iloc[i-1, df.columns.get_loc('last_sell_date')]
+
+            # 매도 신호: 가격 < SMA이고 현재 포지션 있음
+            if df.iloc[i]['Close'] < df.iloc[i]['SMA'] and df.iloc[i-1]['position'] == 1:
+                df.iloc[i, df.columns.get_loc('position')] = 0
+                df.iloc[i, df.columns.get_loc('last_sell_date')] = df.index[i]
+
+            # 매수 신호: 가격 >= SMA이고 현재 포지션 없음
+            elif df.iloc[i]['Close'] >= df.iloc[i]['SMA'] and df.iloc[i-1]['position'] == 0:
+                # 재매수 제한 확인
+                if pd.isna(df.iloc[i-1]['last_sell_date']):
+                    # 매도 이력이 없으면 매수 가능
+                    df.iloc[i, df.columns.get_loc('position')] = 1
+                else:
+                    # 마지막 매도일로부터 경과 일수 계산
+                    days_since_sell = (df.index[i] - df.iloc[i-1]['last_sell_date']).days
+                    if days_since_sell >= rebuying_restriction_days:
+                        # 재매수 제한 기간이 지났으면 매수 가능
+                        df.iloc[i, df.columns.get_loc('position')] = 1
 
         # 포지션 변화 감지
         df['position_change'] = df['position'].diff()
