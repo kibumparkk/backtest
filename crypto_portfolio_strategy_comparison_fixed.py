@@ -196,13 +196,91 @@ class CryptoPortfolioComparisonFixed:
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
+    # ==================== 전략 4: SMA 30 with Cooldown ====================
+    def strategy_sma_30_with_cooldown(self, df, sma_period=30, cooldown_days=3):
+        """
+        SMA 30 교차 전략 + 매도 후 재매수 금지 기간
+        - 가격이 SMA 30 이상일 때 매수 (보유)
+        - 가격이 SMA 30 미만일 때 매도 후 현금 보유
+        - 매도 후 cooldown_days 동안 재매수 금지
+
+        Args:
+            sma_period: SMA 기간 (default: 30)
+            cooldown_days: 매도 후 재매수 금지 기간 (일)
+        """
+        df = df.copy()
+
+        # SMA 계산
+        df['SMA'] = df['Close'].rolling(window=sma_period).mean()
+
+        # 기본 신호 계산
+        df['raw_signal'] = np.where(df['Close'] >= df['SMA'], 1, 0)
+
+        # 매도 후 재매수 금지 로직 적용
+        df['position'] = 0
+        df['days_since_sell'] = 0
+
+        for i in range(1, len(df)):
+            prev_position = df.iloc[i-1]['position']
+            current_signal = df.iloc[i]['raw_signal']
+            days_since_sell = df.iloc[i-1]['days_since_sell']
+
+            # 매도 발생: 포지션 있었는데 신호가 0으로 전환
+            if prev_position == 1 and current_signal == 0:
+                df.iloc[i, df.columns.get_loc('position')] = 0
+                df.iloc[i, df.columns.get_loc('days_since_sell')] = 1
+
+            # 쿨다운 기간 중: 신호와 관계없이 매수 금지
+            elif days_since_sell > 0 and days_since_sell < cooldown_days:
+                df.iloc[i, df.columns.get_loc('position')] = 0
+                df.iloc[i, df.columns.get_loc('days_since_sell')] = days_since_sell + 1
+
+            # 쿨다운 종료 후 또는 쿨다운 없는 상태에서 신호가 1이면 매수
+            elif current_signal == 1 and (days_since_sell == 0 or days_since_sell >= cooldown_days):
+                df.iloc[i, df.columns.get_loc('position')] = 1
+                df.iloc[i, df.columns.get_loc('days_since_sell')] = 0
+
+            # 그 외: 포지션 없음, 쿨다운 리셋
+            else:
+                df.iloc[i, df.columns.get_loc('position')] = 0
+                if days_since_sell >= cooldown_days:
+                    df.iloc[i, df.columns.get_loc('days_since_sell')] = 0
+                elif days_since_sell > 0:
+                    # 쿨다운 기간이 아직 안 끝났는데 신호가 0인 경우는 위에서 처리됨
+                    df.iloc[i, df.columns.get_loc('days_since_sell')] = 0
+                else:
+                    df.iloc[i, df.columns.get_loc('days_since_sell')] = 0
+
+        # 포지션 변화 감지
+        df['position_change'] = df['position'].diff()
+
+        # 일일 수익률 계산
+        df['daily_price_return'] = df['Close'].pct_change()
+        df['returns'] = df['position'].shift(1) * df['daily_price_return']
+
+        # 매수/매도 시 슬리피지 적용
+        slippage_cost = pd.Series(0.0, index=df.index)
+        slippage_cost[df['position_change'] == 1] = -self.slippage
+        slippage_cost[df['position_change'] == -1] = -self.slippage
+
+        df['returns'] = df['returns'] + slippage_cost
+
+        # 누적 수익률
+        df['cumulative'] = (1 + df['returns']).cumprod()
+        return df
+
     # ==================== 전략 실행 ====================
     def run_all_strategies(self):
         """모든 전략을 모든 종목에 대해 실행"""
         strategies = {
             'Turtle Trading (Fixed)': lambda df: self.strategy_turtle_trading(df, entry_period=20, exit_period=10),
             'RSI 55': lambda df: self.strategy_rsi_55(df, rsi_period=14, rsi_threshold=55),
-            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30)
+            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30),
+            'SMA 30 + 3D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=3),
+            'SMA 30 + 4D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=4),
+            'SMA 30 + 5D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=5),
+            'SMA 30 + 6D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=6),
+            'SMA 30 + 7D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=7)
         }
 
         print("\n" + "="*80)
@@ -771,8 +849,8 @@ def main():
         slippage=0.002  # 0.2%
     )
 
-    # 분석 실행
-    metrics_df = comparison.run_analysis()
+    # 분석 실행 (개별 차트 생성 비활성화)
+    metrics_df = comparison.run_analysis(create_individual_charts=False)
 
     # 결과 저장
     print("\nSaving results to CSV...")
