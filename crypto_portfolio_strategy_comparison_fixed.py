@@ -395,6 +395,7 @@ class CryptoPortfolioComparisonFixed:
             'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30),
             'SMA 30 + RSI 55': lambda df: self.strategy_sma_30_rsi_55_combined(df, sma_period=30, rsi_period=14, rsi_threshold=55),
             'Dual SMA (30/20)': lambda df: self.strategy_dual_sma_crossover(df, buy_sma=30, sell_sma=20),
+            'Dual SMA (30/60)': lambda df: self.strategy_dual_sma_crossover(df, buy_sma=30, sell_sma=60),
             'SMA 30 + 3D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=3),
             'SMA 30 + 4D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=4),
             'SMA 30 + 5D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=5),
