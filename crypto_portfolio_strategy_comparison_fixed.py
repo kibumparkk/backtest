@@ -329,6 +329,63 @@ class CryptoPortfolioComparisonFixed:
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
+    # ==================== 전략 6: Dual SMA Crossover (30/20) ====================
+    def strategy_dual_sma_crossover(self, df, buy_sma=30, sell_sma=20):
+        """
+        이중 이동평균 크로스오버 전략
+        - 매수: 전일 종가가 SMA 30을 상승 돌파 (crossover)
+        - 매도: 전일 종가가 SMA 20을 하락 돌파 (crossunder)
+
+        Args:
+            buy_sma: 매수 기준 SMA 기간 (default: 30)
+            sell_sma: 매도 기준 SMA 기간 (default: 20)
+        """
+        df = df.copy()
+
+        # SMA 계산
+        df['SMA_30'] = df['Close'].rolling(window=buy_sma).mean()
+        df['SMA_20'] = df['Close'].rolling(window=sell_sma).mean()
+
+        # 크로스오버 감지
+        # 상승 돌파: 전일 Close < SMA_30 AND 당일 Close >= SMA_30
+        df['buy_crossover'] = (df['Close'].shift(1) < df['SMA_30'].shift(1)) & (df['Close'] >= df['SMA_30'])
+
+        # 하락 돌파: 전일 Close > SMA_20 AND 당일 Close <= SMA_20
+        df['sell_crossunder'] = (df['Close'].shift(1) > df['SMA_20'].shift(1)) & (df['Close'] <= df['SMA_20'])
+
+        # 포지션 계산
+        df['position'] = 0
+        for i in range(1, len(df)):
+            prev_position = df.iloc[i-1]['position']
+
+            # 매수 신호 (상승 돌파)
+            if df.iloc[i]['buy_crossover'] and prev_position == 0:
+                df.iloc[i, df.columns.get_loc('position')] = 1
+            # 매도 신호 (하락 돌파)
+            elif df.iloc[i]['sell_crossunder'] and prev_position == 1:
+                df.iloc[i, df.columns.get_loc('position')] = 0
+            # 포지션 유지
+            else:
+                df.iloc[i, df.columns.get_loc('position')] = prev_position
+
+        # 포지션 변화 감지
+        df['position_change'] = df['position'].diff()
+
+        # 일일 수익률 계산
+        df['daily_price_return'] = df['Close'].pct_change()
+        df['returns'] = df['position'].shift(1) * df['daily_price_return']
+
+        # 매수/매도 시 슬리피지 적용
+        slippage_cost = pd.Series(0.0, index=df.index)
+        slippage_cost[df['position_change'] == 1] = -self.slippage
+        slippage_cost[df['position_change'] == -1] = -self.slippage
+
+        df['returns'] = df['returns'] + slippage_cost
+
+        # 누적 수익률
+        df['cumulative'] = (1 + df['returns']).cumprod()
+        return df
+
     # ==================== 전략 실행 ====================
     def run_all_strategies(self):
         """모든 전략을 모든 종목에 대해 실행"""
@@ -337,6 +394,7 @@ class CryptoPortfolioComparisonFixed:
             'RSI 55': lambda df: self.strategy_rsi_55(df, rsi_period=14, rsi_threshold=55),
             'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30),
             'SMA 30 + RSI 55': lambda df: self.strategy_sma_30_rsi_55_combined(df, sma_period=30, rsi_period=14, rsi_threshold=55),
+            'Dual SMA (30/20)': lambda df: self.strategy_dual_sma_crossover(df, buy_sma=30, sell_sma=20),
             'SMA 30 + 3D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=3),
             'SMA 30 + 4D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=4),
             'SMA 30 + 5D Cooldown': lambda df: self.strategy_sma_30_with_cooldown(df, sma_period=30, cooldown_days=5),
@@ -920,7 +978,7 @@ def main():
 
     # 각 포트폴리오 상세 결과 저장
     for strategy_name in comparison.portfolio_results.keys():
-        filename = f"portfolio_{strategy_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}.csv"
+        filename = f"portfolio_{strategy_name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_').lower()}.csv"
         comparison.portfolio_results[strategy_name].to_csv(filename)
         print(f"Portfolio details saved to {filename}")
 
