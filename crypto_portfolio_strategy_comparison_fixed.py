@@ -196,13 +196,178 @@ class CryptoPortfolioComparisonFixed:
         df['cumulative'] = (1 + df['returns']).cumprod()
         return df
 
+    # ==================== 전략 4: Bollinger Band ====================
+    def strategy_bollinger_band(self, df, window=20, k=2.0):
+        """
+        볼린저 밴드 전략
+        - 전일 종가가 Upper Band 돌파 시 매수
+        - Middle Band (이동평균선) 도달 시 매도
+
+        Args:
+            window: 이동평균선 기간 (default: 20)
+            k: 표준편차 배수 (default: 2.0)
+        """
+        df = df.copy()
+
+        # 볼린저 밴드 계산
+        df['BB_Middle'] = df['Close'].rolling(window=window).mean()
+        df['BB_Std'] = df['Close'].rolling(window=window).std()
+        df['BB_Upper'] = df['BB_Middle'] + (k * df['BB_Std'])
+        df['BB_Lower'] = df['BB_Middle'] - (k * df['BB_Std'])
+
+        # 매매 신호 생성 (shift(1)을 사용하여 look-ahead bias 방지)
+        df['signal'] = 0
+        df['position'] = 0
+
+        for i in range(1, len(df)):
+            # 이전 포지션 유지
+            df.iloc[i, df.columns.get_loc('position')] = df.iloc[i-1, df.columns.get_loc('position')]
+
+            # 매수 조건: 전일 종가가 전일 Upper Band를 돌파 (포지션이 없을 때)
+            if (df.iloc[i-1]['Close'] > df.iloc[i-1]['BB_Upper'] and
+                df.iloc[i-1, df.columns.get_loc('position')] == 0):
+                df.iloc[i, df.columns.get_loc('signal')] = 1  # 매수 신호
+                df.iloc[i, df.columns.get_loc('position')] = 1  # 포지션 진입
+
+            # 매도 조건: 당일 종가가 Middle Band 이하 (포지션이 있을 때)
+            elif (df.iloc[i]['Close'] <= df.iloc[i]['BB_Middle'] and
+                  df.iloc[i-1, df.columns.get_loc('position')] == 1):
+                df.iloc[i, df.columns.get_loc('signal')] = -1  # 매도 신호
+                df.iloc[i, df.columns.get_loc('position')] = 0  # 포지션 청산
+
+        # 수익률 계산
+        df['daily_price_return'] = df['Close'].pct_change()
+        df['returns'] = df['position'].shift(1) * df['daily_price_return']
+
+        # 슬리피지 적용
+        slippage_cost = pd.Series(0.0, index=df.index)
+        slippage_cost[df['signal'] == 1] = -self.slippage   # 매수 시
+        slippage_cost[df['signal'] == -1] = -self.slippage  # 매도 시
+
+        df['returns'] = df['returns'] + slippage_cost
+
+        # NaN 값 처리
+        df['returns'] = df['returns'].fillna(0)
+
+        # 누적 수익률
+        df['cumulative'] = (1 + df['returns']).cumprod()
+
+        return df
+
+    # ==================== 파라미터 최적화 ====================
+    def optimize_bollinger_band_parameters(self, window_range=None, k_range=None):
+        """
+        볼린저 밴드 전략의 최적 파라미터 탐색
+
+        Args:
+            window_range: 테스트할 window 값 리스트 (default: [10, 15, 20, 25, 30])
+            k_range: 테스트할 k 값 리스트 (default: [1.5, 2.0, 2.5, 3.0])
+
+        Returns:
+            최적 파라미터와 성과 지표가 담긴 DataFrame
+        """
+        if window_range is None:
+            window_range = [10, 15, 20, 25, 30]
+        if k_range is None:
+            k_range = [1.5, 2.0, 2.5, 3.0]
+
+        print("\n" + "="*80)
+        print("Optimizing Bollinger Band Parameters...")
+        print("="*80)
+        print(f"Window range: {window_range}")
+        print(f"K range: {k_range}")
+        print(f"Total combinations: {len(window_range) * len(k_range)}")
+        print("="*80 + "\n")
+
+        optimization_results = []
+
+        for window in window_range:
+            for k in k_range:
+                print(f"Testing window={window}, k={k}...")
+
+                # 각 종목에 대해 전략 실행
+                portfolio_returns_list = []
+
+                for symbol in self.symbols:
+                    df = self.data[symbol].copy()
+                    result = self.strategy_bollinger_band(df, window=window, k=k)
+                    portfolio_returns_list.append(result['returns'])
+
+                # 동일 비중 포트폴리오 수익률 계산
+                weight = 1.0 / len(self.symbols)
+
+                # 공통 인덱스 찾기
+                common_index = portfolio_returns_list[0].index
+                for returns in portfolio_returns_list[1:]:
+                    common_index = common_index.intersection(returns.index)
+
+                # 포트폴리오 수익률 합산
+                portfolio_returns = pd.Series(0.0, index=common_index)
+                for returns in portfolio_returns_list:
+                    portfolio_returns += returns.loc[common_index] * weight
+
+                # 성과 지표 계산
+                metrics = self.calculate_metrics(portfolio_returns, f"BB(w={window}, k={k})")
+                metrics['window'] = window
+                metrics['k'] = k
+
+                optimization_results.append(metrics)
+
+                print(f"  Total Return: {metrics['Total Return (%)']:.2f}%, "
+                      f"Sharpe: {metrics['Sharpe Ratio']:.2f}, "
+                      f"MDD: {metrics['MDD (%)']:.2f}%")
+
+        # 결과를 DataFrame으로 변환
+        results_df = pd.DataFrame(optimization_results)
+
+        # 주요 지표별로 정렬
+        print("\n" + "="*80)
+        print("Optimization Results")
+        print("="*80)
+
+        print("\n--- Top 5 by Total Return ---")
+        top_return = results_df.nlargest(5, 'Total Return (%)')
+        print(top_return[['window', 'k', 'Total Return (%)', 'CAGR (%)', 'Sharpe Ratio', 'MDD (%)']].to_string(index=False))
+
+        print("\n--- Top 5 by Sharpe Ratio ---")
+        top_sharpe = results_df.nlargest(5, 'Sharpe Ratio')
+        print(top_sharpe[['window', 'k', 'Total Return (%)', 'CAGR (%)', 'Sharpe Ratio', 'MDD (%)']].to_string(index=False))
+
+        print("\n--- Top 5 by CAGR ---")
+        top_cagr = results_df.nlargest(5, 'CAGR (%)')
+        print(top_cagr[['window', 'k', 'Total Return (%)', 'CAGR (%)', 'Sharpe Ratio', 'MDD (%)']].to_string(index=False))
+
+        # 최적 파라미터 (샤프 비율 기준)
+        best_idx = results_df['Sharpe Ratio'].idxmax()
+        best_params = results_df.iloc[best_idx]
+
+        print("\n" + "="*80)
+        print("Best Parameters (by Sharpe Ratio):")
+        print("="*80)
+        print(f"Window: {int(best_params['window'])}")
+        print(f"K: {best_params['k']:.1f}")
+        print(f"Total Return: {best_params['Total Return (%)']:.2f}%")
+        print(f"CAGR: {best_params['CAGR (%)']:.2f}%")
+        print(f"Sharpe Ratio: {best_params['Sharpe Ratio']:.2f}")
+        print(f"MDD: {best_params['MDD (%)']:.2f}%")
+        print(f"Win Rate: {best_params['Win Rate (%)']:.2f}%")
+        print("="*80 + "\n")
+
+        return results_df
+
     # ==================== 전략 실행 ====================
-    def run_all_strategies(self):
-        """모든 전략을 모든 종목에 대해 실행"""
+    def run_all_strategies(self, bb_window=20, bb_k=2.0):
+        """모든 전략을 모든 종목에 대해 실행
+
+        Args:
+            bb_window: 볼린저 밴드 window 파라미터
+            bb_k: 볼린저 밴드 k 파라미터
+        """
         strategies = {
             'Turtle Trading (Fixed)': lambda df: self.strategy_turtle_trading(df, entry_period=20, exit_period=10),
             'RSI 55': lambda df: self.strategy_rsi_55(df, rsi_period=14, rsi_threshold=55),
-            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30)
+            'SMA 30': lambda df: self.strategy_sma_30(df, sma_period=30),
+            f'Bollinger Band (w={bb_window}, k={bb_k})': lambda df: self.strategy_bollinger_band(df, window=bb_window, k=bb_k)
         }
 
         print("\n" + "="*80)
@@ -726,17 +891,19 @@ class CryptoPortfolioComparisonFixed:
 
         print("\n" + "="*150 + "\n")
 
-    def run_analysis(self, create_individual_charts=True):
+    def run_analysis(self, create_individual_charts=True, bb_window=20, bb_k=2.0):
         """전체 분석 실행
 
         Args:
             create_individual_charts: 개별 종목 차트 생성 여부 (default: True)
+            bb_window: 볼린저 밴드 window 파라미터
+            bb_k: 볼린저 밴드 k 파라미터
         """
         # 1. 데이터 로드
         self.load_data()
 
         # 2. 모든 전략 실행
-        self.run_all_strategies()
+        self.run_all_strategies(bb_window=bb_window, bb_k=bb_k)
 
         # 3. 포트폴리오 생성
         self.create_portfolios()
